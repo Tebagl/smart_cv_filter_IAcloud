@@ -82,14 +82,14 @@ from src.backend.process_manager import ProcessManager
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Abrir el archivo conf.env
+# --- Carga Dinámica del Archivo de Configuración ---
 from dotenv import load_dotenv
 
-# Fuerza la carga del archivo ANTES de que la interfaz decida qué mostrar
-script_dir = os.path.dirname(os.path.abspath(__file__))
-# Si main_gui.py está en src/frontend, subimos dos niveles
-root_dir = os.path.dirname(os.path.dirname(script_dir)) 
-dotenv_path = os.path.join(root_dir, 'conf.env')
+# Reutilizamos la ruta que calcula correctamente si estamos en desarrollo o empaquetados
+dotenv_path = os.path.join(executable_path, 'conf.env')
+load_dotenv(dotenv_path)
+
+logger.info(f"Buscando configuración en: {dotenv_path}")
 
 
 class SmartCVFilterApp(ctk.CTk):
@@ -114,16 +114,9 @@ class SmartCVFilterApp(ctk.CTk):
         self.api_key = None
         self.log_queue = queue.Queue()
 
-        # 2. INICIALIZACIÓN DE VARIABLES DE CONTROL (Obligatorio antes de widgets)
-        self.input_folder = ctk.StringVar(value="")
-        self.api_key = None
-            # Colas de comunicación (Indispensable para el hilo de log_text)
-        self.log_queue = queue.Queue()
-
         # 3. Inicialización de Backend y Estado
         self.analyzer = CVAnalyzer()
         self.cv_handler = CVHandler(self.analyzer)
-        self.api_key = None
         self.process_manager = ProcessManager(executable_path, self.cv_handler)
         
         # 4. Creación de Interfaz (Dibuja los widgets antes de cualquier diálogo)
@@ -140,19 +133,94 @@ class SmartCVFilterApp(ctk.CTk):
         self.after(200, self.verificar_configuracion_inicial)
 
     def verificar_configuracion_inicial(self):
-        """Valida la API Key sin crear ventanas CTk adicionales."""
+        """Valida la API Key. Si no existe, fuerza su creación persistente en disco."""
+        from dotenv import set_key
+
+        # 1. Comprobar si el analizador ya leyó una clave válida del archivo conf.env
         if self.analyzer.api_key:
             self.api_key = self.analyzer.api_key
-            self.log_mensaje("✅ API Key cargada correctamente desde conf.env")
-        else:
-            self.api_key = self.solicitar_api_key()
+            self.log_mensaje("✅ API Key cargada automáticamente desde conf.env")
+            return
+
+        # 2. Si no hay clave, entramos en el bucle de solicitud inicial
+        self.log_mensaje("⚠️ No se detectó API Key en conf.env. Solicitando configuración...")
+        
+        while True:
+            api_key_usuario = self.solicitar_api_key()
             
-        if self.api_key:
-            # ACTUALIZACIÓN: Solo el analizador necesita gestionar la clave directamente
-            self.analyzer.set_api_key(self.api_key)
-            # self.cv_handler.set_api_key(self.api_key)  <-- ELIMINA O COMENTA ESTA LÍNEA
-        else:
-            self.log_mensaje("🛑 No se proporcionó API Key.")
+            # Caso A: El usuario pulsó "Cancel" o dejó el cuadro vacío
+            if not api_key_usuario or not api_key_usuario.strip():
+                self.log_mensaje("🛑 Aplicación cerrada por falta de API Key válida.")
+                self.destroy() # Cerramos la ventana de Tkinter inmediatamente
+                return # Salimos de la función de forma segura
+                
+            # Limpiamos la clave de posibles espacios o saltos de línea (\n)
+            api_key_usuario = api_key_usuario.strip()
+            
+            # Validamos un formato mínimo (Las claves de Groq empiezan por 'gsk_')
+            if api_key_usuario.startswith("gsk_") and len(api_key_usuario) > 20:
+                try:
+                    # 💾 EL REMEDIO: Escribir físicamente el archivo conf.env en la ruta del ejecutable
+                    set_key(dotenv_path, "GROQ_API_KEY", api_key_usuario)
+                    
+                    self.api_key = api_key_usuario
+                    self.analyzer.set_api_key(self.api_key)
+                    
+                    self.log_mensaje(f"💾 ¡Éxito! Archivo 'conf.env' generado en: {dotenv_path}")
+                    break # Rompemos el bucle, la clave es correcta
+                except Exception as e:
+                    self.log_mensaje(f"❌ Error crítico escribiendo conf.env en disco: {e}")
+                    break
+            else:
+                # Si introduce basura, se lo notificamos antes de volver a preguntar
+                tkinter.messagebox.showerror(
+                    "Error de Clave", 
+                    "La clave introducida no parece una API Key válida de Groq (debe empezar por 'gsk_')."
+                )
+
+    def solicitar_api_key(self):
+        """
+        Crea una ventana emergente para la API Key con soporte garantizado
+        para clic derecho (pegar) mediante inyección de eventos.
+        """
+        dialog = ctk.CTkInputDialog(
+            text="Introduce tu API Key de Groq (gsk_...):\n\nEl archivo de configuración se creará automáticamente.", 
+            title="Configuración inicial"
+        )
+        
+        # Creamos el menú contextual una sola vez
+        menu_contextual = tkinter.Menu(self, tearoff=0)
+        
+        # Función para inyectar el comando de pegado
+        def ejecutar_pegado(target):
+            try:
+                target.event_generate("<<Paste>>")
+            except:
+                try:
+                    texto = self.clipboard_get()
+                    target.insert(tkinter.INSERT, texto)
+                except:
+                    pass
+
+        # Localización profunda del widget de entrada real
+        def configurar_eventos(parent):
+            for child in parent.winfo_children():
+                if isinstance(child, (ctk.CTkEntry, tkinter.Entry)):
+                    menu_contextual.delete(0, "end")
+                    menu_contextual.add_command(label="📋 Pegar", command=lambda: ejecutar_pegado(child))
+                    menu_contextual.add_command(label="✂️ Copiar", command=lambda: child.event_generate("<<Copy>>"))
+
+                    def mostrar_menu(event):
+                        child.focus_set()
+                        menu_contextual.tk_popup(event.x_root, event.y_root)
+                        return "break"
+
+                    child.bind("<Button-3>", mostrar_menu)
+                    child.bind("<Button-2>", mostrar_menu)
+                configurar_eventos(child)
+
+        self.after(100, lambda: configurar_eventos(dialog))
+        return dialog.get_input()
 
     def log_mensaje(self, texto):
         """Método auxiliar para escribir en el log de la UI de forma segura"""
@@ -348,58 +416,6 @@ class SmartCVFilterApp(ctk.CTk):
 
     # --- Lógica de la Aplicación ---
     
-    def solicitar_api_key(self):
-        """
-        Crea una ventana emergente para la API Key con soporte garantizado
-        para clic derecho (pegar) mediante inyección de eventos.
-        """
-        dialog = ctk.CTkInputDialog(
-            text="Introduce tu API Key de Groq:", 
-            title="Configuración inicial"
-        )
-        
-        # 1. Creamos el menú contextual una sola vez
-        menu_contextual = tkinter.Menu(self, tearoff=0)
-        
-        # 2. Función para inyectar el comando de pegado
-        def ejecutar_pegado(target):
-            try:
-                # Intentamos usar el comando universal de pegado del sistema
-                target.event_generate("<<Paste>>")
-            except:
-                # Fallback: intentar leer directamente del portapapeles de la app
-                try:
-                    texto = self.clipboard_get()
-                    target.insert(tkinter.INSERT, texto)
-                except:
-                    pass
-
-        # 3. Localización profunda del widget de entrada real
-        def configurar_eventos(parent):
-            for child in parent.winfo_children():
-                # Si encontramos el Entry (ya sea de CTk o de Tkinter puro)
-                if isinstance(child, (ctk.CTkEntry, tkinter.Entry)):
-                    # Configurar menú para este widget específico
-                    menu_contextual.delete(0, "end")
-                    menu_contextual.add_command(label="📋 Pegar", command=lambda: ejecutar_pegado(child))
-                    menu_contextual.add_command(label="✂️ Copiar", command=lambda: child.event_generate("<<Copy>>"))
-
-                    def mostrar_menu(event):
-                        child.focus_set() # Obligatorio para que sepa dónde pegar
-                        menu_contextual.tk_popup(event.x_root, event.y_root)
-                        return "break" # Evita que otros widgets procesen el clic
-
-                    # Vinculamos a todas las variantes de botón derecho/central
-                    child.bind("<Button-3>", mostrar_menu) # Windows/Linux
-                    child.bind("<Button-2>", mostrar_menu) # macOS/Linux Middle click
-                    
-                # Continuar buscando en profundidad
-                configurar_eventos(child)
-
-        # Lanzamos la configuración sobre el diálogo
-        self.after(100, lambda: configurar_eventos(dialog))
-        
-        return dialog.get_input()
 
     def update_top_candidates(self):
         # Limpiamos la lista actual
@@ -548,6 +564,7 @@ class SmartCVFilterApp(ctk.CTk):
                 
                 self.log_queue.put("⏳Reseteando tokens de Groq(15s)...") 
                 self.log_queue.put("-" * 40) # Una línea separadora un poco más larga
+                time.sleep(15)
 
             self.log_queue.put("\n🎊 ¡Clasificación terminada!")
             self.log_queue.put("UPDATE_LIST")
