@@ -208,17 +208,73 @@ class SmartCVFilterApp(ctk.CTk):
                 self.trigger_alert_notice("Error de Clave", aviso)
 
     def _habilitar_pegar_entry(self, dialog, entry):
-        menu_contextual = tkinter.Menu(dialog, tearoff=0, bg=COLOR_SURFACE, fg="white", activebackground=COLOR_ACCENT, bd=0)
-        menu_contextual.add_command(label="📋 Pegar", command=lambda: entry.event_generate("<<Paste>>"))
-        menu_contextual.add_command(label="✂️ Copiar", command=lambda: entry.event_generate("<<Copy>>"))
+        """Menú contextual (clic derecho) en el CTkEntry de la API Key."""
+        widget = getattr(entry, "_entry", entry)
+        menu_contextual = tkinter.Menu(
+            dialog,
+            tearoff=0,
+            bg=COLOR_SURFACE,
+            fg="white",
+            activebackground=COLOR_ACCENT,
+            bd=0,
+        )
+
+        def _texto_seleccionado():
+            try:
+                if widget.selection_present():
+                    return widget.selection_get()
+            except tkinter.TclError:
+                pass
+            return ""
+
+        def pegar():
+            try:
+                texto = dialog.clipboard_get()
+            except tkinter.TclError:
+                return
+            if not texto:
+                return
+            try:
+                if widget.selection_present():
+                    widget.delete("sel.first", "sel.last")
+            except tkinter.TclError:
+                pass
+            widget.insert("insert", texto)
+
+        def copiar():
+            texto = _texto_seleccionado()
+            if not texto:
+                return
+            dialog.clipboard_clear()
+            dialog.clipboard_append(texto)
+
+        def cortar():
+            texto = _texto_seleccionado()
+            if not texto:
+                return
+            dialog.clipboard_clear()
+            dialog.clipboard_append(texto)
+            try:
+                widget.delete("sel.first", "sel.last")
+            except tkinter.TclError:
+                pass
+
+        menu_contextual.add_command(label="Pegar", command=pegar)
+        menu_contextual.add_command(label="Copiar", command=copiar)
+        menu_contextual.add_command(label="Cortar", command=cortar)
 
         def mostrar_menu(event):
             entry.focus_set()
-            menu_contextual.tk_popup(event.x_root, event.y_root)
+            try:
+                menu_contextual.tk_popup(event.x_root + 2, event.y_root + 2)
+            finally:
+                menu_contextual.grab_release()
             return "break"
 
-        entry.bind("<Button-3>", mostrar_menu)
-        entry.bind("<Button-2>", mostrar_menu)
+        # CTkEntry es un Frame: el clic derecho cae en el tk.Entry interno.
+        for target in (entry, widget):
+            target.bind("<Button-3>", mostrar_menu)
+            target.bind("<Button-2>", mostrar_menu)
 
     def _dialogo_entrada_api_key(self, titulo, mensaje):
         """Ventana modal CustomTkinter para introducir la API Key. Devuelve el texto o None."""
