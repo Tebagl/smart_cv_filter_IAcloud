@@ -1054,6 +1054,73 @@ class SmartCVFilterApp(ctk.CTk):
 
         self._alert_after_id = self.after(2000, _cerrar_si_actual)
 
+    def _dialogo_lote_incidencias(self, titulo, mensaje):
+        """Modal de fin de lote con el estilo oscuro de las alertas de saturación."""
+        self._close_alert_notice()
+        self._play_alert_sound()
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(titulo)
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.configure(fg_color="#1e222d")
+        try:
+            dialog.attributes("-topmost", True)
+        except Exception:
+            pass
+
+        width, height = 520, 300
+        self.update_idletasks()
+        px = self.winfo_rootx() + (self.winfo_width() // 2) - (width // 2)
+        py = self.winfo_rooty() + (self.winfo_height() // 2) - (height // 2)
+        dialog.geometry(f"{width}x{height}+{max(px, 0)}+{max(py, 0)}")
+
+        card = ctk.CTkFrame(
+            dialog,
+            fg_color="#1e222d",
+            corner_radius=12,
+            border_width=1,
+            border_color="#3a3f4b",
+        )
+        card.pack(fill="both", expand=True, padx=8, pady=8)
+
+        ctk.CTkLabel(card, text="⚠️", font=("Segoe UI", 32)).pack(pady=(16, 0))
+        ctk.CTkLabel(
+            card,
+            text=titulo,
+            font=("Segoe UI", 15, "bold"),
+            text_color=COLOR_AMBER,
+        ).pack(pady=(4, 8))
+        ctk.CTkLabel(
+            card,
+            text=mensaje,
+            font=("Segoe UI", 12),
+            text_color="#ffffff",
+            wraplength=460,
+            justify="center",
+        ).pack(padx=20, pady=(0, 12))
+
+        def cerrar():
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+
+        ctk.CTkButton(
+            card,
+            text="Aceptar",
+            width=120,
+            corner_radius=8,
+            fg_color=COLOR_ACCENT,
+            hover_color=COLOR_ACCENT_HOVER,
+            command=cerrar,
+        ).pack(pady=(4, 18))
+
+        dialog.protocol("WM_DELETE_WINDOW", cerrar)
+        dialog.after(80, lambda: (dialog.grab_set(), dialog.focus_set()))
+        self.wait_window(dialog)
+
     def open_candidate_cv(self, file_path):
         if not os.path.exists(file_path):
             self.log_text.insert("end", f"⚠️ Archivo no encontrado: {file_path}\n")
@@ -1130,6 +1197,7 @@ class SmartCVFilterApp(ctk.CTk):
         pendientes_parseo = 0
         pendientes_timeout = 0
         pendientes_servidor = 0
+        pendientes_otros = 0
         consecutive_server_errors = 0
         total_procesados = 0
         start_time = time.time()
@@ -1186,17 +1254,18 @@ class SmartCVFilterApp(ctk.CTk):
                 elif status == "server_busy":
                     consecutive_server_errors += 1
                     pendientes_servidor += 1
-                    self.log_queue.put(f"⏳ {file_path.name}: Servidor de Gemini saturado. El archivo permanece en la carpeta de entrada.")
+                    self.log_queue.put(f"⏳ {file_path.name}: Servidor de IA saturado. El archivo permanece en la carpeta de entrada.")
                     # Aviso audiovisual solo al agotar los 5 reintentos de este CV (nunca en el bucle HTTP).
                     self.log_queue.put((
                         "ALERT",
                         "ALTA DEMANDA / PAUSA DETECTADA",
-                        f"{file_path.name}: Gemini respondió 503 (servidor saturado). El archivo permanece en la carpeta de entrada.",
+                        f"{file_path.name}: Servidor de IA saturado (503). El archivo permanece en la carpeta de entrada.",
                     ))
                 elif status == "parse_error":
                     pendientes_parseo += 1
                     self.log_queue.put(f"⚠️ {file_path.name}: Error en respuesta de la IA. El archivo permanece en la carpeta de entrada.")
                 else:
+                    pendientes_otros += 1
                     error_msg = resultado.get("reason", "Error desconocido")
                     self.log_queue.put(f"❌ Error en {file_path.name}: {error_msg}")
 
@@ -1217,72 +1286,64 @@ class SmartCVFilterApp(ctk.CTk):
             segundos = round(elapsed_seconds % 60, 1)
             tiempo_fmt = f"{minutos}m {segundos}s" if minutos > 0 else f"{segundos}s"
 
-            if pendientes_cuota > 0 or pendientes_timeout > 0 or pendientes_servidor > 0:
-                total = pendientes_cuota + pendientes_timeout + pendientes_parseo + pendientes_servidor
+            total_pendientes = (
+                pendientes_cuota + pendientes_timeout + pendientes_servidor
+                + pendientes_parseo + pendientes_otros
+            )
+            if total_pendientes > 0:
                 causas = [
                     (n, causa) for n, causa in (
                         (pendientes_cuota, "CUOTA DE API"),
                         (pendientes_timeout, "TIEMPO DE ESPERA AGOTADO"),
-                        (pendientes_servidor, "SERVIDOR SATURADO"),
+                        (pendientes_servidor, "SERVIDOR DE IA SATURADO"),
                         (pendientes_parseo, "FORMATO DE RESPUESTA"),
+                        (pendientes_otros, "ERROR DE CONEXIÓN O API"),
                     ) if n > 0
                 ]
                 self.log_queue.put("\n" + "="*55)
                 if len(causas) > 1:
                     partes = [f"{n} POR {causa}" for n, causa in causas]
                     desglose = ", ".join(partes[:-1]) + " Y " + partes[-1]
-                    self.log_queue.put(f"⚠️  ATENCIÓN: {total} CV(S) PENDIENTES ({desglose})")
+                    self.log_queue.put(f"⚠️  ATENCIÓN: {total_pendientes} CV(S) PENDIENTES ({desglose})")
                 else:
-                    self.log_queue.put(f"⚠️  ATENCIÓN: {total} CV(S) PENDIENTES POR {causas[0][1]}")
+                    self.log_queue.put(f"⚠️  ATENCIÓN: {total_pendientes} CV(S) PENDIENTES POR {causas[0][1]}")
                 self.log_queue.put("="*55)
-                self.log_queue.put("💡 No se han movido de la carpeta de entrada.")
-                self.log_queue.put("👉 Espera 1-2 minutos y vuelve a pulsar 'CLASIFICAR CVS'.")
+                if pendientes_parseo > 0 and pendientes_cuota == 0 and pendientes_timeout == 0 and pendientes_servidor == 0 and pendientes_otros == 0:
+                    self.log_queue.put("💡 La IA devolvió un formato incompleto. No se han movido de la carpeta de entrada.")
+                    self.log_queue.put("👉 Vuelve a pulsar 'CLASIFICAR CVS' para procesarlos de nuevo.")
+                else:
+                    self.log_queue.put("💡 No se han movido de la carpeta de entrada.")
+                    self.log_queue.put("👉 Espera 1-2 minutos y vuelve a pulsar 'CLASIFICAR CVS'.")
                 self.log_queue.put("="*55 + "\n")
-            elif pendientes_parseo > 0:
-                self.log_queue.put("\n" + "="*55)
-                self.log_queue.put(f"⚠️  ATENCIÓN: {pendientes_parseo} CV(S) PENDIENTES POR RESPUESTA INCOMPLETA DE LA IA")
-                self.log_queue.put("="*55)
-                self.log_queue.put("💡 La IA devolvió un formato incompleto. No se han movido de la carpeta de entrada.")
-                self.log_queue.put("👉 Vuelve a pulsar 'CLASIFICAR CVS' para procesarlos de nuevo.")
-                self.log_queue.put("="*55 + "\n")
+
+                motivos = [
+                    texto for n, texto in (
+                        (pendientes_servidor, "servidor de IA saturado"),
+                        (pendientes_timeout + pendientes_otros, "problemas puntuales de conexión o tiempo de espera"),
+                        (pendientes_cuota, "límite de cuota"),
+                        (pendientes_parseo, "respuesta incompleta de la IA"),
+                    ) if n > 0
+                ]
+                if len(motivos) > 1:
+                    motivo = ", ".join(motivos[:-1]) + " o " + motivos[-1]
+                elif motivos:
+                    motivo = motivos[0]
+                else:
+                    motivo = "problemas puntuales de conexión o tiempo de espera"
+                mensaje_lote = (
+                    f"Han quedado {total_pendientes} CV(s) en la carpeta de entrada por {motivo}. "
+                    "No han sido movidos. Puedes volver a pulsar 'CLASIFICAR CVS' para procesar los restantes."
+                )
             else:
                 self.log_queue.put("\n🎊 ¡Clasificación terminada con éxito!")
                 self.log_queue.put(f"⏱️ Tiempo total: {tiempo_fmt} | 📄 Candidatos analizados: {total_procesados}")
+                mensaje_lote = None
             self.log_queue.put("FIN")
-
-            if pendientes_cuota > 0 or pendientes_timeout > 0 or pendientes_servidor > 0:
-                total = pendientes_cuota + pendientes_timeout + pendientes_parseo + pendientes_servidor
-                partes = [
-                    f"{n} por {causa}" for n, causa in (
-                        (pendientes_cuota, "cuota"),
-                        (pendientes_timeout, "tiempo de espera agotado"),
-                        (pendientes_servidor, "servidor saturado"),
-                        (pendientes_parseo, "formato de respuesta"),
-                    ) if n > 0
-                ]
-                if len(partes) > 1:
-                    detalle = f"Han quedado {total} CV(s) pendientes: {', '.join(partes[:-1])} y {partes[-1]}."
-                else:
-                    detalle = f"Han quedado {total} CV(s) pendientes en la carpeta de entrada."
-                if pendientes_cuota > 0:
-                    titulo = "Límite de Cuota Alcanzado"
-                    causa = "Se ha alcanzado el límite por minuto de la cuenta gratuita de Gemini."
-                elif pendientes_servidor > 0:
-                    titulo = "Servidor de Gemini Saturado"
-                    causa = "El servidor de Gemini no estuvo disponible tras varios intentos (error 503)."
-                else:
-                    titulo = "Tiempo de Espera Agotado"
-                    causa = "Gemini no respondió a tiempo tras varios intentos."
+            if mensaje_lote:
                 self.log_queue.put((
-                    "ALERT",
-                    titulo,
-                    f"{causa} {detalle} Espera 1-2 min y vuelve a pulsar CLASIFICAR CVS.",
-                ))
-            elif pendientes_parseo > 0:
-                self.log_queue.put((
-                    "ALERT",
-                    "Respuesta Incompleta de la IA",
-                    f"Han quedado {pendientes_parseo} CV(s) pendientes por formato incompleto. Vuelve a pulsar CLASIFICAR CVS.",
+                    "LOTE_INCIDENCIAS",
+                    "Proceso completado con incidencias",
+                    mensaje_lote,
                 ))
 
         except Exception as e:
@@ -1293,6 +1354,7 @@ class SmartCVFilterApp(ctk.CTk):
     def check_queues(self):
         pending_alert = None
         auto_pause_alert = False
+        lote_incidencias = None
         try:
             while not self.log_queue.empty():
                 msg = self.log_queue.get_nowait()
@@ -1300,6 +1362,8 @@ class SmartCVFilterApp(ctk.CTk):
                     if not self.paused:
                         self._apply_paused_ui(auto=True)
                     auto_pause_alert = True
+                elif isinstance(msg, tuple) and msg[0] == "LOTE_INCIDENCIAS":
+                    lote_incidencias = (msg[1], msg[2])
                 elif isinstance(msg, tuple) and msg[0] == "ALERT":
                     pending_alert = (msg[1], msg[2])
                 elif isinstance(msg, tuple) and msg[0] == "PROGRESS":
@@ -1320,12 +1384,14 @@ class SmartCVFilterApp(ctk.CTk):
                     self.log_text.see("end")
         except:
             pass
-        # Un solo banner por ciclo: la pausa automática tiene prioridad sobre el aviso de un CV.
+        # Un solo aviso por ciclo: pausa automática > modal de lote > banner de un CV.
         if auto_pause_alert:
             self.trigger_alert_notice(
                 "ALTA DEMANDA / PAUSA DETECTADA",
                 "Se han encadenado 5 fallos por saturación (503). El proceso se ha pausado. Espera 2-3 min y pulsa 'Reanudar análisis'.",
             )
+        elif lote_incidencias:
+            self._dialogo_lote_incidencias(lote_incidencias[0], lote_incidencias[1])
         elif pending_alert:
             self.trigger_alert_notice(pending_alert[0], pending_alert[1])
         self.after(100, self.check_queues)
