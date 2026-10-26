@@ -31,29 +31,40 @@
 
 ## ⚙️ Guía de Inicio Rápido
 
-Necesitas una [API Key de Google Gemini](https://aistudio.google.com/apikey) y conexión a internet. **No crees ni edites ningún archivo de configuración a mano:** la ventana de la aplicación lo gestiona.
+La aplicación es compatible con **Linux** y **Windows**. Necesitas una [API Key de Google Gemini](https://aistudio.google.com/apikey) y conexión a internet. **No crees ni edites ningún archivo de configuración a mano:** la ventana de la aplicación lo gestiona.
 
-### Opción A — Usuario final (Windows)
+### Opción A — Ejecutable / binario nativo
 
-Sin Python ni librerías.
+Sin Python ni librerías. Descarga el compilado de **Releases** o **Artifacts** del repositorio en GitHub.
 
-1. Descarga **`SmartCVFilter-Windows.zip`** desde **Releases** o **Artifacts** del repositorio en GitHub.
-2. Descomprime el ZIP en la carpeta que prefieras.
-3. Ejecuta **`SmartCVFilter.exe`**.
-4. En el **primer inicio**, un cuadro emergente te pedirá la API Key de Gemini. La aplicación crea y persiste la configuración de forma transparente junto al `.exe`.
-5. Los procesos quedan en `procesos_seleccion/`, al mismo nivel que el ejecutable.
+**Windows.** Descarga **`SmartCVFilter-Windows.zip`**.
+
+1. Descomprime el ZIP en la carpeta que prefieras.
+2. Ejecuta **`SmartCVFilter.exe`**.
+3. En el **primer inicio**, un cuadro emergente te pedirá la API Key de Gemini. La aplicación crea y persiste la configuración de forma transparente junto al `.exe`.
+4. Los procesos quedan en `procesos_seleccion/`, al mismo nivel que el ejecutable.
+
+**Linux.** Descarga el compilado **`Smart_cv_filter`**.
+
+1. Colócalo en la carpeta que prefieras y, si hace falta, dale permiso de ejecución (`chmod +x Smart_cv_filter`).
+2. Ejecuta **`Smart_cv_filter`**.
+3. En el **primer inicio**, un cuadro emergente te pedirá la API Key de Gemini. La aplicación crea y persiste la configuración de forma transparente junto al binario.
+4. Los procesos quedan en `procesos_seleccion/`, al mismo nivel que el ejecutable.
+
+Si prefieres generar el binario tú mismo, usa PyInstaller (`pyinstaller SmartCVFilter.spec`) como se indica en la Opción B.
 
 Puedes cambiar la clave más adelante con el botón **🔑 Configurar API Key**.
 
-### Opción B — Desarrollador
+### Opción B — Ejecución con Python (vía directa recomendada)
+
+Es la vía directa recomendada tanto para **usuarios de Linux** como para **desarrolladores** en general.
 
 ```bash
 git clone https://github.com/Tebagl/smart_cv_filter_IAcloud.git
 cd smart_cv_filter_IAcloud
 
-python -m venv .venv
-source .venv/bin/activate          # Linux / macOS
-# .venv\Scripts\activate           # Windows
+python3 -m venv .venv
+source .venv/bin/activate
 
 pip install -r requirements.txt
 python src/frontend/main_gui.py
@@ -121,7 +132,17 @@ procesos_seleccion/
 - La configuración de la API Key se genera en runtime junto a la aplicación y **no se incluye** en el empaquetado (`SmartCVFilter.spec`).
 
 ---
+## 📋 Cumplimiento Normativo (RGPD / AI Act)
 
+Smart CV Filter se proporciona como software de soporte técnico. El uso de herramientas de IA en procesos de selección está sujeto a regulaciones estrictas (incluida la calificación de **Alto Riesgo** bajo el **EU AI Act**).
+
+Ponemos a disposición de las organizaciones las siguientes guías de referencia:
+* [Guía de Cumplimiento RGPD, LOPDGDD y AI Act](docs/compliance_rgpd_ai_act.md)
+* [Modelo Orientativo de Cláusula Informativa para Candidatos](docs/plantilla_clausula_candidatos.md)
+
+*Es responsabilidad exclusiva de la entidad que opera el software asegurar el cumplimiento legal, realizar la correspondiente EIPD y garantizar la supervisión humana efectiva de todas las decisiones.*
+
+---
 ## ⚖️ Licencia
 
 Este software se distribuye bajo la **GNU GPL v3.0**. Puedes usarlo, estudiarlo, modificarlo y redistribuirlo según los términos de esa licencia.
