@@ -1,6 +1,6 @@
 """
 ================================================================================
-SMART CV FILTER - CLOUD EDITION (GROQ LPU™ POWERED)
+SMART CV FILTER - CLOUD EDITION (GOOGLE GEMINI POWERED)
 ================================================================================
 Author: Tebagl
 Date: April 2026
@@ -8,24 +8,24 @@ Version: 2.0 (Cloud Migration)
 
 DESCRIPTION:
 An intelligent GUI-based recruitment tool that automates resume screening.
-This version utilizes the Groq Cloud API (Llama 3.1) for high-performance 
+This version utilizes the Google Gemini API (gemini-3.1-flash-lite) for cloud 
 inference, significantly reducing local RAM and CPU consumption.
 
 KEY FEATURES:
 - Multithreaded Processing: Keeps the UI responsive during API calls.
-- Groq Cloud Integration: Near-instant CV analysis (LPU™ technology).
+- Google Gemini Integration: Fast cloud CV analysis via Google AI Studio.
 - X11 Force-Rendering: Bypasses Wayland/Linux segmentation faults.
 - Dynamic Result Management: Real-time candidate scoring and CSV logging.
 
 DEPENDENCIES:
 - CustomTkinter: Modern GUI framework.
 - Requests: API communication.
-- Python-Dotenv: Secure API key management via .env.
+- Python-Dotenv: Secure API key management via conf.env.
 - Subprocess: System-level PDF/Docx viewing.
 
 USAGE:
 Run with 'python3 src/frontend/main_gui.py'. 
-Requires a valid GROQ_API_KEY in the root .env file.
+Requires a valid GEMINI_API_KEY in the root conf.env file.
 ================================================================================
 """
 
@@ -91,6 +91,23 @@ load_dotenv(dotenv_path)
 
 logger.info(f"Buscando configuración en: {dotenv_path}")
 
+# Paleta del dashboard (grafito / índigo / esmeralda)
+COLOR_BG = "#1e1e24"
+COLOR_SURFACE = "#2b2b36"
+COLOR_CARD = "#252530"
+COLOR_ACCENT = "#4361ee"
+COLOR_ACCENT_HOVER = "#3a86ff"
+COLOR_SUCCESS = "#10b981"
+COLOR_SUCCESS_HOVER = "#059669"
+COLOR_AMBER = "#f59e0b"
+COLOR_AMBER_HOVER = "#d97706"
+COLOR_TEXT = "#e8e8ed"
+COLOR_MUTED = "#9aa0ae"
+COLOR_BORDER = "#3a3a48"
+COLOR_LOG_BG = "#16161c"
+RADIUS = 10
+SECONDS_PER_CV = 11.5
+
 
 class SmartCVFilterApp(ctk.CTk):
     def __init__(self):
@@ -99,9 +116,11 @@ class SmartCVFilterApp(ctk.CTk):
 
         # 1. Configuración de la Ventana Principal (Establece la raíz de TK)
         ctk.set_appearance_mode("dark")
-        self.configure(fg_color="#1a1a1a")
+        self.configure(fg_color=COLOR_BG)
         self.title("Smart CV Filter")
-        self.geometry("900x700")
+        self.geometry("1100x950")
+        self.minsize(760, 560)
+        self.resizable(True, True)
         
 
         # 2. INICIALIZACIÓN DE RUTAS Y VARIABLES (Obligatorio antes de widgets)
@@ -111,11 +130,23 @@ class SmartCVFilterApp(ctk.CTk):
             
         self.input_folder = ctk.StringVar(value="")
         self.results_dir = ""
+        self.shown_accepted = set()
         self.api_key = None
         self.log_queue = queue.Queue()
+        self.pause_event = threading.Event()
+        self.pause_event.set()
+        self.analyzing = False
+        self.paused = False
+        self.pause_started_at = None
+        self.pause_timer_job = None
+        self._alert_win = None
+        self._alert_after_id = None
+        self._alert_generation = 0
 
         # 3. Inicialización de Backend y Estado
         self.analyzer = CVAnalyzer()
+        # Reintentos HTTP (503/429/timeout): solo texto en el log, nunca alerta audiovisual.
+        self.analyzer.status_callback = self._log_analyzer_status
         self.cv_handler = CVHandler(self.analyzer)
         self.process_manager = ProcessManager(executable_path, self.cv_handler)
         
@@ -157,11 +188,11 @@ class SmartCVFilterApp(ctk.CTk):
             # Limpiamos la clave de posibles espacios o saltos de línea (\n)
             api_key_usuario = api_key_usuario.strip()
             
-            # Validamos un formato mínimo (Las claves de Groq empiezan por 'gsk_')
-            if api_key_usuario.startswith("gsk_") and len(api_key_usuario) > 20:
+            # Validamos un formato mínimo (longitud razonable, sin espacios internos)
+            if len(api_key_usuario) > 20 and " " not in api_key_usuario:
                 try:
                     # 💾 EL REMEDIO: Escribir físicamente el archivo conf.env en la ruta del ejecutable
-                    set_key(dotenv_path, "GROQ_API_KEY", api_key_usuario)
+                    set_key(dotenv_path, "GEMINI_API_KEY", api_key_usuario)
                     
                     self.api_key = api_key_usuario
                     self.analyzer.set_api_key(self.api_key)
@@ -172,55 +203,127 @@ class SmartCVFilterApp(ctk.CTk):
                     self.log_mensaje(f"❌ Error crítico escribiendo conf.env en disco: {e}")
                     break
             else:
-                # Si introduce basura, se lo notificamos antes de volver a preguntar
-                tkinter.messagebox.showerror(
-                    "Error de Clave", 
-                    "La clave introducida no parece una API Key válida de Groq (debe empezar por 'gsk_')."
-                )
+                aviso = "La clave introducida no parece una API Key válida de Google Gemini."
+                self.log_mensaje(f"❌ {aviso}")
+                self.trigger_alert_notice("Error de Clave", aviso)
+
+    def _habilitar_pegar_entry(self, dialog, entry):
+        menu_contextual = tkinter.Menu(dialog, tearoff=0, bg=COLOR_SURFACE, fg="white", activebackground=COLOR_ACCENT, bd=0)
+        menu_contextual.add_command(label="📋 Pegar", command=lambda: entry.event_generate("<<Paste>>"))
+        menu_contextual.add_command(label="✂️ Copiar", command=lambda: entry.event_generate("<<Copy>>"))
+
+        def mostrar_menu(event):
+            entry.focus_set()
+            menu_contextual.tk_popup(event.x_root, event.y_root)
+            return "break"
+
+        entry.bind("<Button-3>", mostrar_menu)
+        entry.bind("<Button-2>", mostrar_menu)
+
+    def _dialogo_entrada_api_key(self, titulo, mensaje):
+        """Ventana modal CustomTkinter para introducir la API Key. Devuelve el texto o None."""
+        result = {"value": None}
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(titulo)
+        dialog.geometry("480x230")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.configure(fg_color=COLOR_CARD)
+
+        ctk.CTkLabel(
+            dialog,
+            text=mensaje,
+            font=("Segoe UI", 13, "bold"),
+            text_color=COLOR_TEXT,
+            wraplength=430,
+            justify="left",
+        ).pack(padx=22, pady=(22, 10), anchor="w")
+
+        entry = ctk.CTkEntry(
+            dialog,
+            width=430,
+            show="•",
+            corner_radius=8,
+            border_color=COLOR_BORDER,
+            fg_color=COLOR_SURFACE,
+            text_color=COLOR_TEXT,
+        )
+        entry.pack(padx=22)
+        self._habilitar_pegar_entry(dialog, entry)
+
+        def confirmar():
+            result["value"] = entry.get()
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+
+        def cancelar():
+            result["value"] = None
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+
+        botones = ctk.CTkFrame(dialog, fg_color="transparent")
+        botones.pack(pady=22)
+        ctk.CTkButton(
+            botones, text="Guardar", width=120, corner_radius=8,
+            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER, command=confirmar,
+        ).pack(side="left", padx=10)
+        ctk.CTkButton(
+            botones, text="Cancelar", width=120, corner_radius=8,
+            fg_color=COLOR_SURFACE, hover_color=COLOR_BORDER, command=cancelar,
+        ).pack(side="left", padx=10)
+
+        entry.bind("<Return>", lambda event: confirmar())
+        entry.bind("<Escape>", lambda event: cancelar())
+        dialog.protocol("WM_DELETE_WINDOW", cancelar)
+        dialog.after(150, lambda: (dialog.grab_set(), entry.focus_set()))
+        self.wait_window(dialog)
+        return result["value"]
 
     def solicitar_api_key(self):
-        """
-        Crea una ventana emergente para la API Key con soporte garantizado
-        para clic derecho (pegar) mediante inyección de eventos.
-        """
-        dialog = ctk.CTkInputDialog(
-            text="Introduce tu API Key de Groq (gsk_...):\n\nEl archivo de configuración se creará automáticamente.", 
-            title="Configuración inicial"
+        """Diálogo inicial de API Key con CTkToplevel y la paleta oscura de la app."""
+        return self._dialogo_entrada_api_key(
+            "Configuración inicial",
+            "Introduce tu Google Gemini API Key.\nEl archivo de configuración se creará automáticamente.",
         )
-        
-        # Creamos el menú contextual una sola vez
-        menu_contextual = tkinter.Menu(self, tearoff=0)
-        
-        # Función para inyectar el comando de pegado
-        def ejecutar_pegado(target):
-            try:
-                target.event_generate("<<Paste>>")
-            except:
-                try:
-                    texto = self.clipboard_get()
-                    target.insert(tkinter.INSERT, texto)
-                except:
-                    pass
 
-        # Localización profunda del widget de entrada real
-        def configurar_eventos(parent):
-            for child in parent.winfo_children():
-                if isinstance(child, (ctk.CTkEntry, tkinter.Entry)):
-                    menu_contextual.delete(0, "end")
-                    menu_contextual.add_command(label="📋 Pegar", command=lambda: ejecutar_pegado(child))
-                    menu_contextual.add_command(label="✂️ Copiar", command=lambda: child.event_generate("<<Copy>>"))
+    def abrir_dialogo_api_key(self):
+        """Diálogo para cambiar la API Key de Gemini en cualquier momento."""
+        nueva_clave = self._dialogo_entrada_api_key(
+            "Configurar API Key",
+            "Introduce tu nueva API Key de Google Gemini:",
+        )
+        if not nueva_clave or not nueva_clave.strip():
+            return
+        nueva_clave = nueva_clave.strip()
+        if len(nueva_clave) <= 20 or " " in nueva_clave:
+            aviso = "La clave introducida no parece una API Key válida de Google Gemini."
+            self.log_mensaje(f"❌ {aviso}")
+            self.trigger_alert_notice("Error de Clave", aviso)
+            return
+        self.guardar_api_key(nueva_clave)
 
-                    def mostrar_menu(event):
-                        child.focus_set()
-                        menu_contextual.tk_popup(event.x_root, event.y_root)
-                        return "break"
+    def guardar_api_key(self, nueva_clave):
+        """Persiste la clave en conf.env y la aplica al analizador sin reiniciar."""
+        from dotenv import set_key
+        try:
+            set_key(dotenv_path, "GEMINI_API_KEY", nueva_clave)
+        except Exception as e:
+            self.log_mensaje(f"❌ Error guardando la API Key en conf.env: {e}")
+            return False
 
-                    child.bind("<Button-3>", mostrar_menu)
-                    child.bind("<Button-2>", mostrar_menu)
-                configurar_eventos(child)
+        os.environ["GEMINI_API_KEY"] = nueva_clave
+        self.api_key = nueva_clave
+        if getattr(self, "analyzer", None):
+            self.analyzer.set_api_key(nueva_clave)
 
-        self.after(100, lambda: configurar_eventos(dialog))
-        return dialog.get_input()
+        self.log_mensaje("🔑 API Key de Gemini guardada en conf.env y aplicada con éxito.")
+        return True
 
     def log_mensaje(self, texto):
         """Método auxiliar para escribir en el log de la UI de forma segura"""
@@ -228,98 +331,286 @@ class SmartCVFilterApp(ctk.CTk):
             self.log_text.insert("end", f"{texto}\n")
             self.log_text.see("end")
 
+    def _card(self, parent, **kwargs):
+        opts = {
+            "fg_color": COLOR_CARD,
+            "corner_radius": RADIUS,
+            "border_width": 1,
+            "border_color": COLOR_BORDER,
+        }
+        opts.update(kwargs)
+        return ctk.CTkFrame(parent, **opts)
+
+    def _label(self, parent, text, muted=False, size=12, bold=True):
+        return ctk.CTkLabel(
+            parent,
+            text=text,
+            font=("Segoe UI", size, "bold" if bold else "normal"),
+            text_color=COLOR_MUTED if muted else COLOR_TEXT,
+            anchor="w",
+        )
+
+    def _entry(self, parent, **kwargs):
+        opts = {
+            "corner_radius": 8,
+            "border_color": COLOR_BORDER,
+            "fg_color": COLOR_SURFACE,
+            "text_color": COLOR_TEXT,
+            "placeholder_text_color": COLOR_MUTED,
+            "height": 34,
+        }
+        opts.update(kwargs)
+        return ctk.CTkEntry(parent, **opts)
+
+    def _secondary_button(self, parent, text, command, width=110):
+        return ctk.CTkButton(
+            parent,
+            text=text,
+            command=command,
+            width=width,
+            height=34,
+            corner_radius=8,
+            fg_color=COLOR_SURFACE,
+            hover_color=COLOR_BORDER,
+            text_color=COLOR_TEXT,
+            font=("Segoe UI", 12),
+        )
+
+    def _path_row(self, parent, label, command, textvariable=None, initial=None, placeholder="Selecciona una carpeta..."):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=(0, 10))
+        self._label(row, label, muted=True, size=11).pack(anchor="w", pady=(0, 4))
+
+        inner = ctk.CTkFrame(row, fg_color="transparent")
+        inner.pack(fill="x")
+        inner.grid_columnconfigure(0, weight=1)
+        inner.grid_columnconfigure(1, weight=0)
+
+        entry_kwargs = {"placeholder_text": placeholder, "width": 1}
+        if textvariable is not None:
+            entry_kwargs["textvariable"] = textvariable
+        entry = self._entry(inner, **entry_kwargs)
+        entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self._secondary_button(inner, "Explorar", command).grid(row=0, column=1, sticky="e")
+
+        if initial:
+            entry.insert(0, initial)
+        return entry
+
     def create_widgets(self):
-        # Frame principal con padding
-        main_frame = ctk.CTkFrame(self)
-        main_frame.pack(padx=20, pady=20, fill="both", expand=True)
-
-        # --- NUEVA SECCIÓN: DATOS DEL PROCESO ---
-        process_info_frame = ctk.CTkFrame(main_frame)
-        process_info_frame.pack(fill="x", padx=10, pady=5)
-
-        # Campo Título
-        ctk.CTkLabel(process_info_frame, text="📌 Puesto:", font=("Arial", 12, "bold")).pack(side="left", padx=10)
-        self.entry_puesto = ctk.CTkEntry(process_info_frame, placeholder_text="Ej: Senior Data Engineer", width=200)
-        self.entry_puesto.pack(side="left", padx=5)
-
-        # Campo Fecha (por defecto hoy)
         from datetime import datetime
+
+        main_frame = ctk.CTkFrame(self, fg_color="transparent")
+        main_frame.pack(padx=18, pady=12, fill="both", expand=True)
+        main_frame.grid_columnconfigure(0, weight=1)
+        main_frame.grid_rowconfigure(1, weight=3)
+        main_frame.grid_rowconfigure(2, weight=2)
+
+        # --- HEADER ---
+        header = self._card(main_frame)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        header.grid_columnconfigure(0, weight=1)
+
+        title_box = ctk.CTkFrame(header, fg_color="transparent")
+        title_box.grid(row=0, column=0, sticky="w", padx=18, pady=10)
+        ctk.CTkLabel(
+            title_box,
+            text="Smart CV Filter",
+            font=("Segoe UI", 22, "bold"),
+            text_color=COLOR_TEXT,
+            anchor="w",
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            title_box,
+            text="Cribado semántico de currículums  ·  Gemini 3.1 Flash Lite",
+            font=("Segoe UI", 12),
+            text_color=COLOR_MUTED,
+            anchor="w",
+        ).pack(anchor="w")
+
+        header_actions = ctk.CTkFrame(header, fg_color="transparent")
+        header_actions.grid(row=0, column=1, sticky="e", padx=18, pady=10)
+
         fecha_hoy = datetime.now().strftime("%Y-%m-%d")
-        ctk.CTkLabel(process_info_frame, text="📅 Fecha:", font=("Arial", 12, "bold")).pack(side="left", padx=10)
-        self.entry_fecha = ctk.CTkEntry(process_info_frame, width=120)
+        ctk.CTkLabel(
+            header_actions,
+            text=f"📅  {fecha_hoy}",
+            font=("Segoe UI", 13),
+            text_color=COLOR_MUTED,
+        ).pack(side="left", padx=(0, 12))
+        self._secondary_button(
+            header_actions, "🔑  Configurar API Key", self.abrir_dialogo_api_key, width=180
+        ).pack(side="left")
+
+        # --- CUERPO: formulario izquierdo + candidatos ---
+        body = ctk.CTkFrame(main_frame, fg_color="transparent")
+        body.grid(row=1, column=0, sticky="nsew", pady=(0, 8))
+        body.columnconfigure(0, weight=6)
+        body.columnconfigure(1, weight=4)
+        body.rowconfigure(0, weight=1)
+
+        left = self._card(body)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        left_inner = ctk.CTkFrame(left, fg_color="transparent")
+        left_inner.pack(fill="both", expand=True, padx=16, pady=14)
+        left_inner.grid_columnconfigure(0, weight=1)
+        left_inner.grid_rowconfigure(4, weight=1, minsize=72)
+
+        self._label(left_inner, "Proceso de selección", size=14).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        form_row = ctk.CTkFrame(left_inner, fg_color="transparent")
+        form_row.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        form_row.columnconfigure(0, weight=3)
+        form_row.columnconfigure(1, weight=1)
+
+        puesto_box = ctk.CTkFrame(form_row, fg_color="transparent")
+        puesto_box.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self._label(puesto_box, "Puesto", muted=True, size=11).pack(anchor="w", pady=(0, 4))
+        self.entry_puesto = self._entry(puesto_box, placeholder_text="Ej: Senior Data Engineer")
+        self.entry_puesto.pack(fill="x")
+
+        fecha_box = ctk.CTkFrame(form_row, fg_color="transparent")
+        fecha_box.grid(row=0, column=1, sticky="ew")
+        self._label(fecha_box, "Fecha del proceso", muted=True, size=11).pack(anchor="w", pady=(0, 4))
+        self.entry_fecha = self._entry(fecha_box, width=130)
         self.entry_fecha.insert(0, fecha_hoy)
-        self.entry_fecha.configure(state="readonly") # 🔒 Bloqueado desde el inicio
-        self.entry_fecha.pack(side="left", padx=5)
+        self.entry_fecha.configure(state="readonly")
+        self.entry_fecha.pack(fill="x")
 
-        # --- SECCIÓN 1: CARPETA DE ENTRADA (ARRIBA) ---
-        folder_frame = ctk.CTkFrame(main_frame)
-        folder_frame.pack(fill="x", padx=10, pady=(10, 5))
-        
-        ctk.CTkLabel(folder_frame, text="📂 Carpeta de entrada:", font=("Arial", 12, "bold")).pack(side="left", padx=10)
-        ctk.CTkEntry(folder_frame, textvariable=self.input_folder, width=350).pack(side="left", padx=5, expand=True, fill="x")
-        ctk.CTkButton(folder_frame, text="Explorar", width=100, command=self.select_input_folder).pack(side="right", padx=10)
+        entrada_box = ctk.CTkFrame(left_inner, fg_color="transparent")
+        entrada_box.grid(row=2, column=0, sticky="ew")
+        self.entry_input = self._path_row(
+            entrada_box, "Carpeta de entrada", self.select_input_folder, textvariable=self.input_folder
+        )
 
-        # --- SECCIÓN: CARPETA DE DESTINO (En create_widgets) ---
-        dest_frame = ctk.CTkFrame(main_frame)
-        dest_frame.pack(fill="x", padx=10, pady=5)
+        destino_box = ctk.CTkFrame(left_inner, fg_color="transparent")
+        destino_box.grid(row=3, column=0, sticky="ew")
+        self.entry_destino = self._path_row(
+            destino_box, "Carpeta de destino", self.select_destination_folder, initial=self.default_dest_path
+        )
 
-        ctk.CTkLabel(dest_frame, text="🎯 Destino:", font=("Arial", 12, "bold")).pack(side="left", padx=10)
-
-        self.entry_destino = ctk.CTkEntry(dest_frame, width=350)
-        # Mostramos la carpeta MADRE por defecto
-        self.entry_destino.insert(0, self.default_dest_path) 
-        self.entry_destino.pack(side="left", padx=5, expand=True, fill="x")
-
-        ctk.CTkButton(dest_frame, text="Explorar", width=100, command=self.select_destination_folder).pack(side="right", padx=10)
-
-        # --- SECCIÓN 2: CONTENEDOR MEDIO (COLUMNAS) ---
-        mid_container = ctk.CTkFrame(main_frame, fg_color="transparent")
-        mid_container.pack(fill="both", expand=True, padx=10, pady=5)
-        
-        # Configuramos el peso de las columnas (60% izquierda, 40% derecha)
-        mid_container.columnconfigure(0, weight=6)
-        mid_container.columnconfigure(1, weight=4)
-        mid_container.rowconfigure(0, weight=1)
-
-        # --- COLUMNA IZQUIERDA (JD + BOTÓN) ---
-        left_column = ctk.CTkFrame(mid_container, fg_color="transparent")
-        left_column.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
-        
-        ctk.CTkLabel(left_column, text="📝 Descripción del puesto:", font=("Arial", 13, "bold")).pack(anchor="w", pady=(0, 5))
-        
-        # Textbox de JD
-        self.jd_textbox = ctk.CTkTextbox(left_column, border_width=2)
-        self.jd_textbox.pack(fill="both", expand=True, pady=(0, 10))
-        
-        # Menú de clic derecho
-        self.menu_pegar = tkinter.Menu(self, tearoff=0, bg="#2b2b2b", fg="white", activebackground="#1f538d", bd=0)
+        jd_section = ctk.CTkFrame(left_inner, fg_color="transparent")
+        jd_section.grid(row=4, column=0, sticky="nsew", pady=(0, 4))
+        self._label(jd_section, "Descripción del puesto", muted=True, size=11).pack(anchor="w", pady=(0, 4))
+        self.jd_textbox = ctk.CTkTextbox(
+            jd_section,
+            height=80,
+            corner_radius=8,
+            border_width=1,
+            border_color=COLOR_BORDER,
+            fg_color=COLOR_SURFACE,
+            text_color=COLOR_TEXT,
+            font=("Segoe UI", 13),
+            wrap="word",
+        )
+        self.jd_textbox.pack(fill="both", expand=True)
+        self.menu_pegar = tkinter.Menu(self, tearoff=0, bg=COLOR_SURFACE, fg="white", activebackground=COLOR_ACCENT, bd=0)
         self.menu_pegar.add_command(label="  📋 Pegar Texto  ", command=self.pegar_texto)
         self.jd_textbox.bind("<Button-3>", self.mostrar_menu)
 
-        # Botón Clasificar (Debajo de la JD)
+        btn_bar = ctk.CTkFrame(left_inner, fg_color="transparent")
+        btn_bar.grid(row=5, column=0, sticky="ew", pady=(12, 8))
         self.btn_analyze = ctk.CTkButton(
-            left_column, 
-            text="🚀 CLASIFICAR CVS", 
-            font=("Arial", 14, "bold"), 
-            height=45, 
-            command=self.run_analysis
+            btn_bar,
+            text="🚀  CLASIFICAR CVS",
+            font=("Segoe UI", 14, "bold"),
+            height=45,
+            corner_radius=10,
+            fg_color=COLOR_ACCENT,
+            hover_color=COLOR_ACCENT_HOVER,
+            text_color="#ffffff",
+            command=self.run_analysis,
         )
         self.btn_analyze.pack(fill="x")
 
-        # --- COLUMNA DERECHA (CVS ACEPTADOS) ---
-        right_column = ctk.CTkFrame(mid_container)
-        right_column.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
-        
-        self.candidates_list = ctk.CTkScrollableFrame(right_column, label_text="CVs Aceptados")
-        self.candidates_list.pack(fill="both", expand=True, padx=5, pady=5)
+        right = self._card(body)
+        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        right_inner = ctk.CTkFrame(right, fg_color="transparent")
+        right_inner.pack(fill="both", expand=True, padx=14, pady=14)
 
-        # --- SECCIÓN 3: CONSOLA DE LOGS (ABAJO) ---
-        console_frame = ctk.CTkFrame(main_frame)
-        console_frame.pack(fill="x", side="bottom", padx=10, pady=(5, 10))
-        
-        ctk.CTkLabel(console_frame, text="🖥️ Log de procesamiento:", font=("Arial", 11, "bold")).pack(anchor="w", padx=10, pady=(5, 0))
-        self.log_text = ctk.CTkTextbox(console_frame, height=120, fg_color="#1a1a1a", text_color="#00ff00", font=("Courier", 12),wrap="word")
-        self.log_text.pack(fill="x", padx=10, pady=10)
+        self._label(right_inner, "CVs aceptados", size=14).pack(anchor="w")
+        ctk.CTkLabel(
+            right_inner,
+            text="Pulsa una tarjeta para abrir el documento",
+            font=("Segoe UI", 11),
+            text_color=COLOR_MUTED,
+            anchor="w",
+        ).pack(anchor="w", pady=(0, 8))
+
+        self.candidates_list = ctk.CTkScrollableFrame(
+            right_inner,
+            fg_color=COLOR_SURFACE,
+            corner_radius=8,
+            border_width=0,
+        )
+        self.candidates_list.pack(fill="both", expand=True)
+
+        # --- PIE: progreso + visor de eventos ---
+        footer = self._card(main_frame)
+        footer.grid(row=2, column=0, sticky="nsew")
+        footer_inner = ctk.CTkFrame(footer, fg_color="transparent")
+        footer_inner.pack(fill="both", expand=True, padx=16, pady=(8, 12))
+        footer_inner.grid_columnconfigure(0, weight=1)
+        footer_inner.grid_rowconfigure(4, weight=1)
+
+        progress_row = ctk.CTkFrame(footer_inner, fg_color="transparent")
+        progress_row.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        self._label(progress_row, "Progreso del lote", muted=True, size=11).pack(side="left")
+        self.progress_label = ctk.CTkLabel(
+            progress_row,
+            text="0 / 0  |  Tiempo est.: —",
+            font=("Segoe UI", 11),
+            text_color=COLOR_MUTED,
+        )
+        self.progress_label.pack(side="right")
+
+        control_row = ctk.CTkFrame(footer_inner, fg_color="transparent")
+        control_row.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        self.btn_pause = ctk.CTkButton(
+            control_row,
+            text="⏸️  Pausar análisis",
+            width=180,
+            height=32,
+            corner_radius=8,
+            fg_color=COLOR_AMBER,
+            hover_color=COLOR_AMBER_HOVER,
+            text_color="#1a1a1a",
+            font=("Segoe UI", 12, "bold"),
+            command=self.toggle_pause,
+            state="disabled",
+        )
+        self.btn_pause.pack(side="left")
+        self.pause_status_label = ctk.CTkLabel(
+            control_row,
+            text="",
+            font=("Segoe UI", 12),
+            text_color=COLOR_AMBER,
+            anchor="w",
+        )
+        self.pause_status_label.pack(side="left", fill="x", expand=True, padx=(12, 0))
+
+        self.progress_bar = ctk.CTkProgressBar(
+            footer_inner,
+            height=8,
+            corner_radius=8,
+            progress_color=COLOR_ACCENT,
+            fg_color=COLOR_SURFACE,
+        )
+        self.progress_bar.set(0)
+        self.progress_bar.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+
+        self._label(footer_inner, "Eventos", muted=True, size=11).grid(row=3, column=0, sticky="w", pady=(0, 4))
+        self.log_text = ctk.CTkTextbox(
+            footer_inner,
+            height=80,
+            corner_radius=8,
+            border_width=0,
+            fg_color="#18181f",
+            text_color="#e0e0e0",
+            font=("Courier", 12),
+            wrap="word",
+        )
+        self.log_text.grid(row=4, column=0, sticky="nsew")
 
     # --- Funciones de Soporte para Clic Derecho ---
     def mostrar_menu(self, event):
@@ -418,47 +709,294 @@ class SmartCVFilterApp(ctk.CTk):
     
 
     def update_top_candidates(self):
-        # Limpiamos la lista actual
+        """Carga inicial (una vez) de aceptados al abrir o reanudar un proceso."""
         for widget in self.candidates_list.winfo_children():
             widget.destroy()
+        self.shown_accepted.clear()
 
-        if not os.path.exists(self.results_dir):
+        if not self.results_dir or not os.path.exists(self.results_dir):
             return
 
         try:
-            # 1. Obtenemos la lista de archivos
-            archivos = [f for f in os.listdir(self.results_dir) 
+            archivos = [f for f in os.listdir(self.results_dir)
                        if f.lower().endswith(('.txt', '.pdf', '.docx'))]
-            
-            # 2. ORDENAR: Los más altos arriba
             archivos.sort(reverse=True)
-            
             for nombre in archivos:
-                # --- 🛡️ PARCHE DE SEGURIDAD: FILTRO DE SCORE ---
-                # Intentamos extraer el número del principio del nombre (ej: "70_C.V.pdf")
                 try:
-                    score_str = nombre.split('_')[0]
-                    score_val = int(score_str)
+                    score_val = int(nombre.split('_')[0])
                 except (ValueError, IndexError):
-                    score_val = 0 # Si no hay número, lo ignoramos
-
-                # SOLO añadimos a la lista de la derecha si supera el umbral (60%)
+                    score_val = 0
                 if score_val >= 60:
-                    ruta_completa = os.path.join(self.results_dir, nombre)
-                    display_name = nombre 
-
-                    btn = ctk.CTkButton(
-                        self.candidates_list, 
-                        text=f"⭐ {display_name}",
-                        fg_color="#34495e",
-                        hover_color="#1f538d",
-                        anchor="w",
-                        command=lambda r=ruta_completa: self.open_candidate_cv(r)
-                    )
-                    btn.pack(fill="x", pady=2, padx=5)    
+                    self.agregar_tarjeta_cv_aceptado({
+                        "dest_path": os.path.join(self.results_dir, nombre),
+                        "nombre": nombre,
+                        "score": score_val,
+                    })
         except Exception as e:
             logger.error(f"Error actualizando lista visual: {e}")
 
+    def agregar_tarjeta_cv_aceptado(self, datos_cv):
+        """Añade una sola tarjeta al final, sin vaciar el contenedor."""
+        ruta = datos_cv.get("dest_path") or ""
+        nombre_archivo = os.path.basename(ruta) if ruta else str(datos_cv.get("nombre", ""))
+        if not nombre_archivo or nombre_archivo in self.shown_accepted:
+            return
+        try:
+            score_val = int(float(datos_cv.get("score", 0)))
+        except (TypeError, ValueError):
+            score_val = 0
+        if score_val < 60:
+            return
+        display_name = nombre_archivo.split("_", 1)[1] if "_" in nombre_archivo else nombre_archivo
+        self.shown_accepted.add(nombre_archivo)
+        self._add_candidate_card(display_name, score_val, ruta)
+
+    def _add_candidate_card(self, display_name, score_val, ruta_completa):
+        badge_color = COLOR_SUCCESS if score_val >= 70 else COLOR_ACCENT
+        card = ctk.CTkFrame(
+            self.candidates_list,
+            fg_color=COLOR_CARD,
+            corner_radius=8,
+            cursor="hand2",
+        )
+        card.pack(fill="x", pady=4, padx=4)
+
+        name_label = ctk.CTkLabel(
+            card,
+            text=display_name,
+            font=("Segoe UI", 12),
+            text_color=COLOR_TEXT,
+            anchor="w",
+            justify="left",
+        )
+        name_label.pack(side="left", fill="x", expand=True, padx=(12, 8), pady=10)
+
+        badge = ctk.CTkLabel(
+            card,
+            text=f"{score_val}%",
+            font=("Segoe UI", 12, "bold"),
+            text_color="#ffffff",
+            fg_color=badge_color,
+            corner_radius=8,
+            width=52,
+            height=26,
+        )
+        badge.pack(side="right", padx=(0, 12), pady=8)
+
+        def abrir(_event=None, r=ruta_completa):
+            self.open_candidate_cv(r)
+
+        for widget in (card, name_label, badge):
+            widget.bind("<Button-1>", abrir)
+
+    def _interruptible_sleep(self, seconds):
+        """Espera entre CVs; si el usuario pausa, se detiene hasta reanudar."""
+        remaining = seconds
+        while remaining > 0:
+            if not self.pause_event.is_set():
+                self.pause_event.wait()
+                return
+            step = min(0.5, remaining)
+            time.sleep(step)
+            remaining -= step
+
+    def _configure_pause_button(self, paused, enabled):
+        if not hasattr(self, "btn_pause"):
+            return
+        if not enabled:
+            self.btn_pause.configure(
+                text="⏸️  Pausar análisis",
+                fg_color=COLOR_AMBER,
+                hover_color=COLOR_AMBER_HOVER,
+                state="disabled",
+            )
+            return
+        if paused:
+            self.btn_pause.configure(
+                text="▶️  Reanudar análisis",
+                fg_color=COLOR_SUCCESS,
+                hover_color=COLOR_SUCCESS_HOVER,
+                text_color="#ffffff",
+                state="normal",
+            )
+        else:
+            self.btn_pause.configure(
+                text="⏸️  Pausar análisis",
+                fg_color=COLOR_AMBER,
+                hover_color=COLOR_AMBER_HOVER,
+                text_color="#1a1a1a",
+                state="normal",
+            )
+
+    def _start_pause_timer(self):
+        self.pause_started_at = time.time()
+        self._tick_pause_timer()
+
+    def _stop_pause_timer(self):
+        if self.pause_timer_job is not None:
+            try:
+                self.after_cancel(self.pause_timer_job)
+            except Exception:
+                pass
+            self.pause_timer_job = None
+        self.pause_started_at = None
+        if hasattr(self, "pause_status_label"):
+            self.pause_status_label.configure(text="")
+
+    def _tick_pause_timer(self):
+        if not self.paused or self.pause_started_at is None:
+            return
+        elapsed = int(time.time() - self.pause_started_at)
+        minutos, segundos = divmod(elapsed, 60)
+        self.pause_status_label.configure(
+            text=f"⏸️ En pausa — Tiempo transcurrido: {minutos:02d}:{segundos:02d} (Recomendado: 2-3 min)"
+        )
+        self.pause_timer_job = self.after(1000, self._tick_pause_timer)
+
+    def _apply_paused_ui(self, auto=False):
+        self.paused = True
+        self._configure_pause_button(paused=True, enabled=True)
+        self._start_pause_timer()
+        if auto:
+            self.log_mensaje("⚠️ Proceso pausado automáticamente por racha de saturación (503).")
+        else:
+            self.log_mensaje("⏸️ Análisis pausado. La petición en curso termina; el lote espera al siguiente CV.")
+
+    def _apply_resumed_ui(self):
+        self.paused = False
+        self._stop_pause_timer()
+        self._configure_pause_button(paused=False, enabled=True)
+        self.log_mensaje("▶️ Análisis reanudado.")
+
+    def toggle_pause(self):
+        if not self.analyzing:
+            return
+        if self.paused:
+            self.pause_event.set()
+            self._apply_resumed_ui()
+        else:
+            self.pause_event.clear()
+            self._apply_paused_ui(auto=False)
+
+    def _format_eta(self, seconds):
+        if seconds <= 0:
+            return "~0 s"
+        minutos = seconds / 60.0
+        if minutos >= 1:
+            return f"~{int(round(minutos))} min"
+        return f"~{int(round(seconds))} s"
+
+    def _set_progress(self, current, total):
+        if not hasattr(self, "progress_bar"):
+            return
+        total = max(int(total), 0)
+        current = max(int(current), 0)
+        restantes = max(total - current, 0)
+        eta = self._format_eta(restantes * SECONDS_PER_CV if current > 0 else total * SECONDS_PER_CV)
+        if total == 0:
+            self.progress_label.configure(text="0 / 0  |  Tiempo est.: —")
+        else:
+            self.progress_label.configure(text=f"{current} / {total}  |  Tiempo est.: {eta}")
+        self.progress_bar.set(0 if total == 0 else min(current / total, 1.0))
+
+    def _play_alert_sound(self):
+        try:
+            print("\a", end="", flush=True)
+        except Exception:
+            pass
+        sound = "/usr/share/sounds/freedesktop/stereo/dialog-warning.oga"
+        if os.path.exists(sound):
+            try:
+                subprocess.Popen(
+                    ["paplay", sound],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+
+    def _log_analyzer_status(self, message):
+        """Reintentos HTTP del analyzer: únicamente texto en el log de eventos."""
+        if not message:
+            return
+        self.log_queue.put(message if isinstance(message, str) else str(message))
+
+    def _close_alert_notice(self):
+        if self._alert_after_id is not None:
+            try:
+                self.after_cancel(self._alert_after_id)
+            except Exception:
+                pass
+            self._alert_after_id = None
+        if self._alert_win is not None:
+            win = self._alert_win
+            self._alert_win = None
+            try:
+                win.withdraw()
+            except Exception:
+                pass
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+    def trigger_alert_notice(self, titulo, mensaje, icono_tipo="warning"):
+        """Aviso audiovisual de 2 s: banner flotante CustomTkinter, no bloqueante."""
+        self._close_alert_notice()
+        self._play_alert_sound()
+        self._alert_generation += 1
+        generation = self._alert_generation
+
+        width, height = 460, 180
+        win = ctk.CTkToplevel(self)
+        win.overrideredirect(True)
+        win.configure(fg_color="#1e222d")
+        try:
+            win.attributes("-topmost", True)
+        except Exception:
+            pass
+        try:
+            win.wm_attributes("-type", "notification")
+        except Exception:
+            pass
+
+        self.update_idletasks()
+        px = self.winfo_rootx() + (self.winfo_width() // 2) - (width // 2)
+        py = self.winfo_rooty() + (self.winfo_height() // 2) - (height // 2)
+        win.geometry(f"{width}x{height}+{max(px, 0)}+{max(py, 0)}")
+
+        card = ctk.CTkFrame(
+            win,
+            fg_color="#1e222d",
+            corner_radius=12,
+            border_width=1,
+            border_color="#3a3f4b",
+        )
+        card.pack(fill="both", expand=True, padx=2, pady=2)
+
+        ctk.CTkLabel(card, text="⚠️", font=("Segoe UI", 32)).pack(pady=(16, 0))
+        ctk.CTkLabel(
+            card,
+            text=titulo,
+            font=("Segoe UI", 15, "bold"),
+            text_color=COLOR_AMBER,
+        ).pack(pady=(4, 2))
+        ctk.CTkLabel(
+            card,
+            text=mensaje,
+            font=("Segoe UI", 12),
+            text_color="#ffffff",
+            wraplength=400,
+            justify="center",
+        ).pack(padx=18, pady=(0, 16))
+
+        self._alert_win = win
+
+        def _cerrar_si_actual():
+            if generation == self._alert_generation:
+                self._close_alert_notice()
+
+        self._alert_after_id = self.after(2000, _cerrar_si_actual)
 
     def open_candidate_cv(self, file_path):
         if not os.path.exists(file_path):
@@ -498,6 +1036,7 @@ class SmartCVFilterApp(ctk.CTk):
             self.log_text.see("end")
             return
         
+        self._set_progress(0, 0)
         self.log_text.insert("end", "⏳ Preparando entorno de análisis...\n")
         self.log_text.see("end")
 
@@ -523,10 +1062,21 @@ class SmartCVFilterApp(ctk.CTk):
 
         # Bloquear botón e iniciar hilo de trabajo
         self.btn_analyze.configure(state="disabled")
+        self.pause_event.set()
+        self.analyzing = True
+        self.paused = False
+        self._configure_pause_button(paused=False, enabled=True)
         threading.Thread(target=self.analysis_worker, args=(user_description,), daemon=True).start()
         
 
     def analysis_worker(self, user_job_desc):
+        pendientes_cuota = 0
+        pendientes_parseo = 0
+        pendientes_timeout = 0
+        pendientes_servidor = 0
+        consecutive_server_errors = 0
+        total_procesados = 0
+        start_time = time.time()
         try:
 
             folder_path = Path(self.input_folder.get())
@@ -535,17 +1085,24 @@ class SmartCVFilterApp(ctk.CTk):
            
             if not files:
                 self.log_queue.put("⚠️ No se encontraron archivos (PDF, DOCX, TXT) en la carpeta seleccionada.")
+                self.log_queue.put(("PROGRESS", 0, 0))
                 self.log_queue.put("FIN")
                 return
 
-            self.log_queue.put(f"📑 Procesando {len(files)} candidatos...")
+            self.log_queue.put(("PROGRESS", 0, len(files)))
+            eta_inicial = self._format_eta(len(files) * SECONDS_PER_CV)
+            self.log_queue.put(f"📑 Procesando {len(files)} candidatos...  |  Tiempo est.: {eta_inicial}")
 
-            for file_path in files:
+            for index, file_path in enumerate(files, start=1):
+                self.pause_event.wait()
                 self.log_queue.put(f"🔍 Analizando: {file_path.name}")
                 
                 resultado = self.cv_handler.process_cv(str(file_path), user_job_desc)
+                status = resultado.get("status")
 
-                if resultado.get("status") == "success":
+                if status == "success":
+                    consecutive_server_errors = 0
+                    total_procesados += 1
                     # Usamos .get() con valores por defecto para evitar CRASHES
                     score = resultado.get("score", 0)
                     motivo = resultado.get("motivo", "No se proporcionó explicación")
@@ -555,20 +1112,122 @@ class SmartCVFilterApp(ctk.CTk):
                     self.log_queue.put(f"✅ SCORE -> {score}%")
                     self.log_queue.put(f"   💡 MOTIVO: {motivo}") 
                     self.log_queue.put("-" * 45)
-                    self.log_queue.put("UPDATE_LIST")
+                    if resultado.get("decision") == "RECLUTADOS" and float(score) >= 60:
+                        self.log_queue.put(("ADD_ACCEPTED", {
+                            "dest_path": resultado.get("dest_path"),
+                            "nombre": resultado.get("nombre"),
+                            "score": score,
+                        }))
                     
                 
+                elif status == "api_error":
+                    pendientes_cuota += 1
+                    self.log_queue.put(f"⚠️ {file_path.name}: Límite de cuota. El archivo permanece en la carpeta de entrada.")
+                elif status == "timeout_error":
+                    consecutive_server_errors += 1
+                    pendientes_timeout += 1
+                    self.log_queue.put(f"⏳ {file_path.name}: CV marcado como pendiente por agotamiento de timeouts. El archivo permanece en la carpeta de entrada.")
+                elif status == "server_busy":
+                    consecutive_server_errors += 1
+                    pendientes_servidor += 1
+                    self.log_queue.put(f"⏳ {file_path.name}: Servidor de Gemini saturado. El archivo permanece en la carpeta de entrada.")
+                    # Aviso audiovisual solo al agotar los 5 reintentos de este CV (nunca en el bucle HTTP).
+                    self.log_queue.put((
+                        "ALERT",
+                        "ALTA DEMANDA / PAUSA DETECTADA",
+                        f"{file_path.name}: Gemini respondió 503 (servidor saturado). El archivo permanece en la carpeta de entrada.",
+                    ))
+                elif status == "parse_error":
+                    pendientes_parseo += 1
+                    self.log_queue.put(f"⚠️ {file_path.name}: Error en respuesta de la IA. El archivo permanece en la carpeta de entrada.")
                 else:
                     error_msg = resultado.get("reason", "Error desconocido")
                     self.log_queue.put(f"❌ Error en {file_path.name}: {error_msg}")
-                
-                self.log_queue.put("⏳Reseteando tokens de Groq(15s)...") 
-                self.log_queue.put("-" * 40) # Una línea separadora un poco más larga
-                time.sleep(15)
 
-            self.log_queue.put("\n🎊 ¡Clasificación terminada!")
-            self.log_queue.put("UPDATE_LIST")
+                if consecutive_server_errors >= 5:
+                    consecutive_server_errors = 0
+                    self.log_queue.put("⚠️ Alta demanda en los servidores de Google: 5 fallos consecutivos. El proceso se pausa automáticamente.")
+                    self.log_queue.put(("AUTO_PAUSE",))
+                    self.pause_event.clear()
+                    self.pause_event.wait()
+                
+                self.log_queue.put(("PROGRESS", index, len(files)))
+                self.log_queue.put("⏳ Pausa entre análisis (4.5s)...")
+                self.log_queue.put("-" * 40) # Una línea separadora un poco más larga
+                self._interruptible_sleep(4.5)
+
+            elapsed_seconds = round(time.time() - start_time, 1)
+            minutos = int(elapsed_seconds // 60)
+            segundos = round(elapsed_seconds % 60, 1)
+            tiempo_fmt = f"{minutos}m {segundos}s" if minutos > 0 else f"{segundos}s"
+
+            if pendientes_cuota > 0 or pendientes_timeout > 0 or pendientes_servidor > 0:
+                total = pendientes_cuota + pendientes_timeout + pendientes_parseo + pendientes_servidor
+                causas = [
+                    (n, causa) for n, causa in (
+                        (pendientes_cuota, "CUOTA DE API"),
+                        (pendientes_timeout, "TIEMPO DE ESPERA AGOTADO"),
+                        (pendientes_servidor, "SERVIDOR SATURADO"),
+                        (pendientes_parseo, "FORMATO DE RESPUESTA"),
+                    ) if n > 0
+                ]
+                self.log_queue.put("\n" + "="*55)
+                if len(causas) > 1:
+                    partes = [f"{n} POR {causa}" for n, causa in causas]
+                    desglose = ", ".join(partes[:-1]) + " Y " + partes[-1]
+                    self.log_queue.put(f"⚠️  ATENCIÓN: {total} CV(S) PENDIENTES ({desglose})")
+                else:
+                    self.log_queue.put(f"⚠️  ATENCIÓN: {total} CV(S) PENDIENTES POR {causas[0][1]}")
+                self.log_queue.put("="*55)
+                self.log_queue.put("💡 No se han movido de la carpeta de entrada.")
+                self.log_queue.put("👉 Espera 1-2 minutos y vuelve a pulsar 'CLASIFICAR CVS'.")
+                self.log_queue.put("="*55 + "\n")
+            elif pendientes_parseo > 0:
+                self.log_queue.put("\n" + "="*55)
+                self.log_queue.put(f"⚠️  ATENCIÓN: {pendientes_parseo} CV(S) PENDIENTES POR RESPUESTA INCOMPLETA DE LA IA")
+                self.log_queue.put("="*55)
+                self.log_queue.put("💡 La IA devolvió un formato incompleto. No se han movido de la carpeta de entrada.")
+                self.log_queue.put("👉 Vuelve a pulsar 'CLASIFICAR CVS' para procesarlos de nuevo.")
+                self.log_queue.put("="*55 + "\n")
+            else:
+                self.log_queue.put("\n🎊 ¡Clasificación terminada con éxito!")
+                self.log_queue.put(f"⏱️ Tiempo total: {tiempo_fmt} | 📄 Candidatos analizados: {total_procesados}")
             self.log_queue.put("FIN")
+
+            if pendientes_cuota > 0 or pendientes_timeout > 0 or pendientes_servidor > 0:
+                total = pendientes_cuota + pendientes_timeout + pendientes_parseo + pendientes_servidor
+                partes = [
+                    f"{n} por {causa}" for n, causa in (
+                        (pendientes_cuota, "cuota"),
+                        (pendientes_timeout, "tiempo de espera agotado"),
+                        (pendientes_servidor, "servidor saturado"),
+                        (pendientes_parseo, "formato de respuesta"),
+                    ) if n > 0
+                ]
+                if len(partes) > 1:
+                    detalle = f"Han quedado {total} CV(s) pendientes: {', '.join(partes[:-1])} y {partes[-1]}."
+                else:
+                    detalle = f"Han quedado {total} CV(s) pendientes en la carpeta de entrada."
+                if pendientes_cuota > 0:
+                    titulo = "Límite de Cuota Alcanzado"
+                    causa = "Se ha alcanzado el límite por minuto de la cuenta gratuita de Gemini."
+                elif pendientes_servidor > 0:
+                    titulo = "Servidor de Gemini Saturado"
+                    causa = "El servidor de Gemini no estuvo disponible tras varios intentos (error 503)."
+                else:
+                    titulo = "Tiempo de Espera Agotado"
+                    causa = "Gemini no respondió a tiempo tras varios intentos."
+                self.log_queue.put((
+                    "ALERT",
+                    titulo,
+                    f"{causa} {detalle} Espera 1-2 min y vuelve a pulsar CLASIFICAR CVS.",
+                ))
+            elif pendientes_parseo > 0:
+                self.log_queue.put((
+                    "ALERT",
+                    "Respuesta Incompleta de la IA",
+                    f"Han quedado {pendientes_parseo} CV(s) pendientes por formato incompleto. Vuelve a pulsar CLASIFICAR CVS.",
+                ))
 
         except Exception as e:
             self.log_queue.put(f"❌ Error crítico: {e}")
@@ -576,18 +1235,43 @@ class SmartCVFilterApp(ctk.CTk):
 
 
     def check_queues(self):
+        pending_alert = None
+        auto_pause_alert = False
         try:
             while not self.log_queue.empty():
                 msg = self.log_queue.get_nowait()
-                if msg == "UPDATE_LIST":
+                if isinstance(msg, tuple) and msg[0] == "AUTO_PAUSE":
+                    if not self.paused:
+                        self._apply_paused_ui(auto=True)
+                    auto_pause_alert = True
+                elif isinstance(msg, tuple) and msg[0] == "ALERT":
+                    pending_alert = (msg[1], msg[2])
+                elif isinstance(msg, tuple) and msg[0] == "PROGRESS":
+                    self._set_progress(msg[1], msg[2])
+                elif isinstance(msg, tuple) and msg[0] == "ADD_ACCEPTED":
+                    self.agregar_tarjeta_cv_aceptado(msg[1])
+                elif msg == "UPDATE_LIST":
                     self.update_top_candidates()
                 elif msg == "FIN":
+                    self.analyzing = False
+                    self.paused = False
+                    self.pause_event.set()
+                    self._stop_pause_timer()
+                    self._configure_pause_button(paused=False, enabled=False)
                     self.btn_analyze.configure(state="normal")
                 else:
                     self.log_text.insert("end", f"{msg}\n")
                     self.log_text.see("end")
         except:
             pass
+        # Un solo banner por ciclo: la pausa automática tiene prioridad sobre el aviso de un CV.
+        if auto_pause_alert:
+            self.trigger_alert_notice(
+                "ALTA DEMANDA / PAUSA DETECTADA",
+                "Se han encadenado 5 fallos por saturación (503). El proceso se ha pausado. Espera 2-3 min y pulsa 'Reanudar análisis'.",
+            )
+        elif pending_alert:
+            self.trigger_alert_notice(pending_alert[0], pending_alert[1])
         self.after(100, self.check_queues)
 
 

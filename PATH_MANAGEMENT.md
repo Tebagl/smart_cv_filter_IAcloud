@@ -21,10 +21,10 @@ Los archivos se clasifican físicamente para facilitar la navegación mediante e
 - **DESCARTADOS/**: Candidatos no aptos o con 0 coincidencias técnicas.
 
 ### 🧠 Gestión de IA y Credenciales
-- **Inferencia (Groq API)**: Ya no se almacenan pesos de modelos pesados (Gemma/Llama) en local. La lógica reside en la nube de Groq.
-- **Configuración (`.env`)**:
+- **Inferencia (Google Gemini API)**: Ya no se almacenan pesos de modelos pesados (Gemma/Llama) en local. La lógica reside en la nube de Google Gemini.
+- **Configuración (`conf.env`)**:
   - **Ubicación**: Raíz del proyecto / Junto al ejecutable.
-  - **Función**: Contiene la `GROQ_API_KEY`. Es fundamental para la comunicación con el motor de análisis.
+  - **Función**: Contiene la `GEMINI_API_KEY`. Es fundamental para la comunicación con el motor de análisis.
 - **NLP Local (spaCy)**: Los modelos de anonimización ligera se cargan desde el entorno de ejecución para garantizar el cumplimiento de la GDPR antes del envío de datos.
 
 ### ⚙️ Resolución de Rutas

@@ -1,36 +1,16 @@
+-r requirements.txt
+
 # Testing
 pytest==7.4.4
 pytest-cov==4.1.0
 pytest-mock==3.12.0
+responses==0.25.0
+pdfplumber>=0.10  # tests/test_module.py → src/backend/extractor.py
 
-# Type Checking
-mypy==1.9.0
-types-python-dotenv==1.0.0
-types-requests==2.31.0.20240125
-types-PyYAML==6.0.12.12
+# Compilación
+pyinstaller==6.22.3
 
-# Linting and Code Quality
-flake8==7.0.0
+# Formato y lint
 black==24.3.0
 isort==5.13.2
-
-# Debugging
-ipdb==0.13.13
-
-# Documentation
-sphinx==7.2.6
-sphinx-rtd-theme==2.0.0
-
-# Security Scanning
-bandit==1.7.8
-
-# Performance Profiling
-py-spy==0.3.14
-
-# Mocking and Simulation
-hypothesis==6.95.4
-responses==0.25.0  # Útil para simular respuestas de la API de Groq
-
-# Additional Development Tools
-pre-commit==3.7.0
-pip-tools==7.3.0  # Recomendado para gestionar la compilación de dependencias
+flake8==7.0.0

@@ -1,17 +1,13 @@
-# --- INTERFAZ GRÁFICA (UI) ---
+# Producción: dependencias directas de src/frontend y src/backend
+# (ruta de ejecución: python src/frontend/main_gui.py)
+
+# Interfaz
 customtkinter==5.2.2
-darkdetect==0.8.0
-pillow==12.1.1
 
-# --- EXTRACCIÓN Y PROCESAMIENTO de DATOS ---
-pymupdf==1.24.1
-pdfminer.six==20231228
-python-docx==1.2.0
-odfpy==1.4.1
-
-# --- COMUNICACIÓN CLOUD (GROQ API) ---
+# Inferencia Gemini (HTTPS) y configuración
 requests==2.31.0
 python-dotenv==1.0.1
 
-# --- COMPATIBILIDAD ---
-packaging==23.2
+# Extracción de CVs (cv_handler: fitz + python-docx)
+pymupdf==1.24.1
+python-docx==1.2.0

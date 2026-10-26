@@ -100,7 +100,7 @@ class CVHandler:
         Guarda los resultados en un archivo CSV dentro de la carpeta del proceso.
         """
         # Buscamos la carpeta del proceso actual
-        report_path = os.path.join(self.base_output, "resumen_clasificacion.csv")
+        report_path = os.path.join(self.base_output, "resumen_proceso.csv")
         
         # Definimos las columnas
         fieldnames = ['nombre', 'score', 'decision', 'motivo', 'ruta_final']
@@ -159,43 +159,81 @@ class CVHandler:
             # Al limitar a 5000 caracteres, aseguras que no superas los 12K tokens del modelo versatile
             texto_para_ia = texto_para_la_nube[:5000]
             jd = job_description if job_description else "Perfil general"
-            decision_raw = self.analyzer.analyze(texto_para_la_nube, jd)
+            decision_raw = self.analyzer.analyze(texto_para_ia, jd)
 
             # Limpieza inmediata de memoria
             del texto_para_la_nube
             del texto_para_ia
             gc.collect()
         
+            # Sin respuesta de la IA (cuota 429, 5xx, timeout, formato 400, API key o conexión): el archivo no se mueve
+            if not decision_raw or not isinstance(decision_raw, str):
+                nombre_original = os.path.basename(file_path)
+                last_error = getattr(self.analyzer, "last_error", None)
+
+                if last_error == "rate_limit":
+                    decision, motivo = "PENDIENTE_ERROR_API", "Límite de cuota de Gemini (archivo no movido)"
+                    retorno = {"status": "api_error", "reason": "Límite de cuota alcanzado en Gemini"}
+                elif last_error == "timeout":
+                    decision, motivo = "PENDIENTE_TIMEOUT", "Tiempo de espera agotado tras varios intentos (archivo no movido)"
+                    retorno = {"status": "timeout_error", "reason": "Tiempo de espera agotado en Gemini"}
+                elif last_error == "server_busy":
+                    decision, motivo = "PENDIENTE_SERVIDOR_OCUPADO", "Servidor de Gemini saturado (503) tras varios intentos (archivo no movido)"
+                    retorno = {"status": "server_busy", "reason": "Servidor de Gemini saturado"}
+                elif last_error == "format":
+                    decision, motivo = "PENDIENTE_ERROR_PARSEO", "Gemini rechazó el JSON generado por la IA (400 json_validate_failed, archivo no movido)"
+                    retorno = {"status": "parse_error", "reason": "Respuesta JSON truncada o inválida de la IA"}
+                else:
+                    decision, motivo = "PENDIENTE_ERROR_API", "Error de conexión o de API Gemini (archivo no movido)"
+                    retorno = {"status": "error", "reason": "Error de conexión o de API Gemini (archivo no movido)"}
+
+                self._append_to_report({
+                    "nombre": nombre_original,
+                    "score": "N/A",
+                    "decision": decision,
+                    "motivo": motivo,
+                    "dest_path": file_path
+                })
+                retorno["nombre"] = nombre_original
+                return retorno
+
             # Inicialización de variables de seguridad
             f_score, reason, apto_ia = 0, "Error desconocido", "NO"
 
             # 3. --- PROCESAMIENTO ROBUSTO DE LA RESPUESTA ---
-            if not decision_raw or not isinstance(decision_raw, str):
-                reason = "Error: La IA no devolvió respuesta. Revisa conexión o API Key."
-            else:
-                try:
-                    # Limpieza de bordes: buscar el bloque JSON
-                    start = decision_raw.find('{')
-                    end = decision_raw.rfind('}') + 1
+            try:
+                # Limpieza de bordes: buscar el bloque JSON
+                start = decision_raw.find('{')
+                end = decision_raw.rfind('}') + 1
+                
+                if start != -1 and end > start:
+                    res_json = json.loads(decision_raw[start:end])
+                    f_score = float(res_json.get("score", 0))
+                    apto_ia = res_json.get("apto", "NO")
+                    reason = res_json.get("motivo", "")
                     
-                    if start != -1 and end > start:
-                        res_json = json.loads(decision_raw[start:end])
-                        f_score = float(res_json.get("score", 0))
-                        apto_ia = res_json.get("apto", "NO")
-                        reason = res_json.get("motivo", "")
-                        
-                        # Fallback: Si el motivo está vacío pero hay score
-                        if not reason or str(reason).strip().lower() in ["none", "null", ""]:
-                            if f_score >= 70:
-                                reason = "Cumple con los requisitos técnicos principales del puesto."
-                            elif f_score >= 50:
-                                reason = "Perfil con potencial o trayectoria histórica que requiere validación."
-                            else:
-                                reason = "No se detecta alineación técnica con la vacante."
-                    else:
-                        reason = "Error: La respuesta de la IA no contiene un formato JSON válido."
-                except Exception as e:
-                    reason = f"Error de interpretación en respuesta IA: {str(e)}"
+                    # Fallback: Si el motivo está vacío pero hay score
+                    if not reason or str(reason).strip().lower() in ["none", "null", ""]:
+                        if f_score >= 70:
+                            reason = "Cumple con los requisitos técnicos principales del puesto."
+                        elif f_score >= 50:
+                            reason = "Perfil con potencial o trayectoria histórica que requiere validación."
+                        else:
+                            reason = "No se detecta alineación técnica con la vacante."
+                else:
+                    reason = "Error: La respuesta de la IA no contiene un formato JSON válido."
+            except json.JSONDecodeError as e:
+                nombre_original = os.path.basename(file_path)
+                self._append_to_report({
+                    "nombre": nombre_original,
+                    "score": "N/A",
+                    "decision": "PENDIENTE_ERROR_PARSEO",
+                    "motivo": f"Error al decodificar JSON de la IA: {str(e)}",
+                    "dest_path": file_path
+                })
+                return {"status": "parse_error", "reason": "Respuesta JSON truncada o inválida de la IA", "nombre": nombre_original}
+            except Exception as e:
+                reason = f"Error de interpretación en respuesta IA: {str(e)}"
 
             # 4. Clasificación física del archivo original
             nombre_original = os.path.basename(file_path)
@@ -220,7 +258,6 @@ class CVHandler:
                 "dest_path": ruta_final
             }
             self._append_to_report(resultado)
-            time.sleep(15)  # Pausa para evitar saturar la IA con múltiples archivos en rápida sucesión
             return resultado
 
         except Exception as e:

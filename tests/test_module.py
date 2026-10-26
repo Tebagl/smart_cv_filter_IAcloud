@@ -1,7 +1,14 @@
 import os
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch, MagicMock
-from extractor import UniversalExtractor
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.backend.extractor import UniversalExtractor
 
 class TestUniversalExtractor(unittest.TestCase):
     def setUp(self):
@@ -31,7 +38,7 @@ class TestUniversalExtractor(unittest.TestCase):
             
         os.remove(dummy_file)
 
-    @patch('extractor.pdfplumber')
+    @patch('src.backend.extractor.pdfplumber')
     def test_extract_pdf_2_columns(self, mock_pdfplumber):
         # Mocking pdfplumber for a 2-column layout CV
         mock_pdf = MagicMock()

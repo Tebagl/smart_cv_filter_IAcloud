@@ -1,5 +1,12 @@
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from src.backend.cv_handler import CandidateRepository
 from src.backend.analyzer import CVAnalyzer
 

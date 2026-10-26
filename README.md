@@ -1,14 +1,14 @@
-# 🚀 Smart CV Filter - Cloud Edition (Groq Llama-3)
+# 🚀 Smart CV Filter - Cloud Edition (Google Gemini)
 
 **Smart CV Filter** es una herramienta de reclutamiento inteligente diseñada para automatizar el cribado inicial de currículums con extrema velocidad y precisión. 
 
-Al aprovechar la tecnología **Groq LPU™ (Language Processing Unit)** y los modelos **Llama 3.1**, esta versión elimina los cuellos de botella de hardware de los LLM locales, procesando docenas de CV en segundos en lugar de horas.
+Al aprovechar la **API de Google Gemini** (modelo **gemini-3.1-flash-lite** vía Google AI Studio), esta versión elimina los cuellos de botella de hardware de los LLM locales, procesando docenas de CV en segundos en lugar de horas.
 
 ---
 
 ## ✨ Características Principales
 
-* **Inferencia Ultra-Rápida:** Potenciado por la API de Groq Cloud para un análisis casi instantáneo.
+* **Inferencia Ultra-Rápida:** Potenciado por la API de Google Gemini para un análisis casi instantáneo.
 * **Puntuación Inteligente:** Emparejamiento semántico avanzado entre Descripciones de Puesto y Currículums.
 * **Flujo de Trabajo Continuo:** Detecta automáticamente carpetas de proyectos existentes para retomar procesos de selección previos.
 * **Reportes Auditables:** Genera archivos `resumen_proceso.csv` detallados con puntuaciones y el razonamiento técnico detrás de cada decisión.
@@ -20,7 +20,7 @@ Al aprovechar la tecnología **Groq LPU™ (Language Processing Unit)** y los mo
 
 * **Lenguaje:** Python 3.x
 * **Frontend:** CustomTkinter (Desktop GUI moderna)
-* **Motor de IA:** Groq Cloud API (`llama-3.1-8b-instant`)
+* **Motor de IA:** Google Gemini API (`gemini-3.1-flash-lite`)
 * **Manejo de Datos:** PDFMiner / PyMuPDF / python-docx / CSV
 
 ---
@@ -28,7 +28,7 @@ Al aprovechar la tecnología **Groq LPU™ (Language Processing Unit)** y los mo
 ## ⚙️ Guía de Inicio Rápido
 
 ### 1. Requisitos Previos
-* Una cuenta en [console.groq.com](https://console.groq.com) para obtener tu API Key gratuita.
+* Una cuenta en [Google AI Studio](https://aistudio.google.com/apikey) para obtener tu API Key gratuita de Gemini.
 * Conexión a internet.
 
 ### 2. Instalación
@@ -41,10 +41,10 @@ pip install customtkinter python-dotenv requests pdfminer.six python-docx PyMuPD
 ```
 
 ### 3. Configuración
-Crea un archivo `.env` en la raíz del proyecto y añade tu clave:
+Crea un archivo `conf.env` en la raíz del proyecto y añade tu clave:
 
 ```env
-GROQ_API_KEY=tu_clave_aqui_gsk_...
+GEMINI_API_KEY=tu_clave_aqui
 ```
 
 ### 4. Ejecución
@@ -87,7 +87,7 @@ Procesos/
 
 ## 🧠 Backend (`src/backend/`)
 
-* **`analyzer.py`**: Motor de inteligencia. Gestiona peticiones HTTPS a Groq con un prompt determinista (Temperature 0.0).
+* **`analyzer.py`**: Motor de inteligencia. Gestiona peticiones HTTPS a Google Gemini con un prompt determinista (Temperature 0.0).
 * **`process_manager.py`**: Director de orquesta. Maneja la creación de directorios, persistencia en CSV y gestión de copias de seguridad.
 * **`extractor.py`**: Especialista en *parsing*. Convierte archivos binarios (PDF/Word) en texto plano normalizado en UTF-8.
 * **`cv_handler.py`**: Lógica de pre-procesamiento. Limpia caracteres especiales y optimiza el texto para minimizar el uso de tokens.
