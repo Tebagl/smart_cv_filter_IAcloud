@@ -2,6 +2,15 @@
 
 **Smart CV Filter** es una herramienta de escritorio para el cribado semántico de currículums. Utiliza la API de **Google Gemini** (`gemini-3.1-flash-lite` vía Google AI Studio) para puntuar cada CV frente a una descripción de puesto, sin modelos locales pesados.
 
+
+## 🖥️ Capturas de Pantalla
+
+<p align="center">
+  <img src="docs/images/ui/ui_1.png" width="48%" alt="Pantalla Principal" />
+  <img src="docs/images/ui/ui_2.png" width="48%" alt="Pantalla principal ejecución" />
+  <img src="docs/images/ui/ui_2.png" width="48%" alt="Detalle pantalla principal" />
+  <img src="docs/images/alert/alert.png" width="48%" alt="Alerta Modal de Incidencias" />
+</p>
 ---
 
 ## ✨ Características
