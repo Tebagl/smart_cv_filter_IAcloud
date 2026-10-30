@@ -206,7 +206,7 @@ class CVAnalyzer:
                 else:
                     wait_time = backoff_waits[attempt]
                     self._notify(
-                        f"⏳ Servidor de Gemini saturado ({response.status_code}). Esperando {wait_time:g}s para reintentar (intento {attempt + 1}/{max_retries})..."
+                        f"⏳ Servidor de IA saturado ({response.status_code}). Esperando {wait_time:g}s para reintentar (intento {attempt + 1}/{max_retries})..."
                     )
                 time.sleep(wait_time)
                 continue
@@ -238,7 +238,7 @@ class CVAnalyzer:
         if last_failure == "timeout":
             self._notify(f"❌ Tiempo de espera agotado tras {max_retries} intentos. El CV queda pendiente en la carpeta de entrada.")
         elif last_failure == "server_busy":
-            self._notify(f"❌ Servidor de Gemini saturado tras {max_retries} intentos. El CV queda pendiente en la carpeta de entrada.")
+            self._notify(f"❌ Servidor de IA saturado tras {max_retries} intentos. El CV queda pendiente en la carpeta de entrada.")
         else:
             self._notify(f"❌ Límite de cuota de Gemini persistente tras {max_retries} intentos. El CV queda pendiente en la carpeta de entrada.")
         self.last_error = last_failure

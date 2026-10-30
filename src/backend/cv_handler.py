@@ -178,8 +178,8 @@ class CVHandler:
                     decision, motivo = "PENDIENTE_TIMEOUT", "Tiempo de espera agotado tras varios intentos (archivo no movido)"
                     retorno = {"status": "timeout_error", "reason": "Tiempo de espera agotado en Gemini"}
                 elif last_error == "server_busy":
-                    decision, motivo = "PENDIENTE_SERVIDOR_OCUPADO", "Servidor de Gemini saturado (503) tras varios intentos (archivo no movido)"
-                    retorno = {"status": "server_busy", "reason": "Servidor de Gemini saturado"}
+                    decision, motivo = "PENDIENTE_SERVIDOR_OCUPADO", "Servidor de IA saturado (503) tras varios intentos (archivo no movido)"
+                    retorno = {"status": "server_busy", "reason": "Servidor de IA saturado"}
                 elif last_error == "format":
                     decision, motivo = "PENDIENTE_ERROR_PARSEO", "Gemini rechazó el JSON generado por la IA (400 json_validate_failed, archivo no movido)"
                     retorno = {"status": "parse_error", "reason": "Respuesta JSON truncada o inválida de la IA"}
