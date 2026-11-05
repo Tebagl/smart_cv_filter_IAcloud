@@ -165,49 +165,56 @@ class SmartCVFilterApp(ctk.CTk):
         # 6. Verificación de Configuración con retraso (SOLUCIÓN VENTANA DOBLE)
         self.after(200, self.verificar_configuracion_inicial)
 
-    def verificar_configuracion_inicial(self):
-        """Valida la API Key. Si no existe, fuerza su creación persistente en disco."""
+   def verificar_configuracion_inicial(self):
+        """Valida la API Key leyendo directamente el archivo conf.env."""
         from dotenv import set_key
 
-        # 1. Comprobar si el analizador ya leyó una clave válida del archivo conf.env
-        if self.analyzer.api_key:
-            self.api_key = self.analyzer.api_key
+        # 1. Comprobación directa: leer conf.env en disco si analyzer no la tiene
+        clave_detectada = self.analyzer.api_key or os.getenv("GEMINI_API_KEY")
+
+        if not clave_detectada and os.path.isfile(dotenv_path):
+            try:
+                with open(dotenv_path, "r", encoding="utf-8") as f:
+                    for linea in f:
+                        linea = linea.strip()
+                        if linea.startswith("GEMINI_API_KEY="):
+                            clave_detectada = linea.split("=", 1)[1].strip().strip("'\"")
+                            break
+            except Exception as e:
+                logger.error(f"Error leyendo conf.env directamente: {e}")
+
+        # Si encontramos clave en el archivo, la registramos y nos quedamos en la app
+        if clave_detectada:
+            self.api_key = clave_detectada
+            os.environ["GEMINI_API_KEY"] = clave_detectada
+            self.analyzer.set_api_key(clave_detectada)
             self.log_mensaje("✅ API Key cargada automáticamente desde conf.env")
             return
 
-        # 2. Si no hay clave, entramos en el bucle de solicitud inicial
+        # 2. Si realmente no existe en conf.env, solicitarla por diálogo
         self.log_mensaje("⚠️ No se detectó API Key en conf.env. Solicitando configuración...")
         
-        while True:
-            api_key_usuario = self.solicitar_api_key()
+        api_key_usuario = self.solicitar_api_key()
+        
+        if not api_key_usuario or not api_key_usuario.strip():
+            self.log_mensaje("🛑 No se introdujo API Key. Puedes configurarla desde el botón superior.")
+            # IMPORTANTE: NO llamamos a self.destroy() para que la ventana principal no se cierre
+            return
             
-            # Caso A: El usuario pulsó "Cancel" o dejó el cuadro vacío
-            if not api_key_usuario or not api_key_usuario.strip():
-                self.log_mensaje("🛑 Aplicación cerrada por falta de API Key válida.")
-                self.destroy() # Cerramos la ventana de Tkinter inmediatamente
-                return # Salimos de la función de forma segura
-                
-            # Limpiamos la clave de posibles espacios o saltos de línea (\n)
-            api_key_usuario = api_key_usuario.strip()
-            
-            # Validamos un formato mínimo (longitud razonable, sin espacios internos)
-            if len(api_key_usuario) > 20 and " " not in api_key_usuario:
-                try:
-                    # 💾 EL REMEDIO: Escribir físicamente el archivo conf.env en la ruta del ejecutable
-                    set_key(dotenv_path, "GEMINI_API_KEY", api_key_usuario)
-                    
-                    self.api_key = api_key_usuario
-                    self.analyzer.set_api_key(self.api_key)
-                    
-                    self.log_mensaje(f"💾 ¡Éxito! Archivo 'conf.env' generado en: {dotenv_path}")
-                    break # Rompemos el bucle, la clave es correcta
-                except Exception as e:
-                    self.log_mensaje(f"❌ Error crítico escribiendo conf.env en disco: {e}")
-                    break
-            else:
-                aviso = "La clave introducida no parece una API Key válida de Google Gemini."
-                self.log_mensaje(f"❌ {aviso}")
-                self.trigger_alert_notice("Error de Clave", aviso)
+        api_key_usuario = api_key_usuario.strip().strip("'\"")
+        
+        if len(api_key_usuario) > 20 and " " not in api_key_usuario:
+            try:
+                set_key(dotenv_path, "GEMINI_API_KEY", api_key_usuario)
+                self.api_key = api_key_usuario
+                self.analyzer.set_api_key(self.api_key)
+                self.log_mensaje(f"💾 Archivo 'conf.env' generado con éxito en: {dotenv_path}")
+            except Exception as e:
+                self.log_mensaje(f"❌ Error escribiendo conf.env: {e}")
+        else:
+            aviso = "La clave introducida no parece una API Key válida de Google Gemini."
+            self.log_mensaje(f"❌ {aviso}")
+            self.trigger_alert_notice("Error de Clave", aviso)
 
     def _habilitar_pegar_entry(self, dialog, entry):
         """Menú contextual (clic derecho) en el CTkEntry de la API Key."""
