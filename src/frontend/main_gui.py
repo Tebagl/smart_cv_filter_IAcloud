@@ -47,7 +47,6 @@ import time
 import tkinter
 import customtkinter as ctk
 
-
 # --- Configuración de Rutas ---
 def get_resource_path():
     """Ruta para archivos internos (código, iconos, etc.)"""
@@ -113,7 +112,7 @@ class SmartCVFilterApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.withdraw()  # Evita que la ventana parpadee antes de configurar todo
-
+        
         # 1. Configuración de la Ventana Principal (Establece la raíz de TK)
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=COLOR_BG)
@@ -144,7 +143,10 @@ class SmartCVFilterApp(ctk.CTk):
         self._alert_generation = 0
 
         # 3. Inicialización de Backend y Estado
-        self.analyzer = CVAnalyzer()
+        # Le pasamos la clave leída en el arranque si ya existe
+        clave_inicial = os.getenv("GEMINI_API_KEY")
+        self.analyzer = CVAnalyzer(api_key=clave_inicial) 
+        
         # Reintentos HTTP (503/429/timeout): solo texto en el log, nunca alerta audiovisual.
         self.analyzer.status_callback = self._log_analyzer_status
         self.cv_handler = CVHandler(self.analyzer)
