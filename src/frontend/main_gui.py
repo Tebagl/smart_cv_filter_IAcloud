@@ -195,7 +195,7 @@ class SmartCVFilterApp(ctk.CTk):
         # 6. Verificación de Configuración con retraso (SOLUCIÓN VENTANA DOBLE)
         self.after(200, self.verificar_configuracion_inicial)
 
-   def verificar_configuracion_inicial(self):
+    def verificar_configuracion_inicial(self):
         """Valida la API Key leyendo directamente el archivo conf.env."""
         from dotenv import set_key
 
