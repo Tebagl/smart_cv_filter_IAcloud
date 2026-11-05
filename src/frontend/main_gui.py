@@ -29,12 +29,37 @@ Requires a valid GEMINI_API_KEY in the root conf.env file.
 ================================================================================
 """
 
-# 1. Ajustes del Sistema Operativo
-import os
-os.environ["GDK_BACKEND"] = "x11"
-
-# 2. Librerías Estándar de Python
+# 1. Registro de emergencia inmediato (se ejecuta antes de cualquier import)
 import sys
+import os
+
+if getattr(sys, 'frozen', False):
+    app_dir = os.path.dirname(sys.executable)
+else:
+    app_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+crash_log_path = os.path.join(app_dir, "crash_error.log")
+
+def escribir_crash(msg):
+    try:
+        with open(crash_log_path, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except Exception:
+        pass
+
+# Iniciar el log limpio en disco
+with open(crash_log_path, "w", encoding="utf-8") as f:
+    f.write("--- INICIANDO SMART CV FILTER ---\n")
+
+escribir_crash(f"SO detectado: {sys.platform}")
+
+# 2. Ajustes de Sistema Operativo (SOLO en Linux)
+if sys.platform.startswith("linux"):
+    os.environ["GDK_BACKEND"] = "x11"
+    escribir_crash("Aplicado GDK_BACKEND=x11 para Linux")
+
+# 3. Importaciones estándar
+escribir_crash("Importando librerias estandar...")
 import threading
 import logging
 import queue
@@ -43,10 +68,15 @@ import subprocess
 from pathlib import Path
 import time
 
-# 3. Librerías de Interfaz Gráfica
-import tkinter
-import customtkinter as ctk
-
+# 4. Importaciones de interfaz grafica
+escribir_crash("Importando tkinter y customtkinter...")
+try:
+    import tkinter
+    import customtkinter as ctk
+    escribir_crash("Librerias GUI importadas con exito.")
+except Exception as e:
+    import traceback
+    escribir_crash(f"ERROR importando librerias GUI:\n{traceback.format_exc()}")
 # --- Configuración de Rutas ---
 def get_resource_path():
     """Ruta para archivos internos (código, iconos, etc.)"""
