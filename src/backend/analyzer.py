@@ -27,7 +27,7 @@ DATA FLOW:
 1. Load API Key -> 2. Construct Prompt -> 3. POST Request -> 4. JSON Parse
 ================================================================================
 """
-
+import sys
 import requests
 import json
 import os
@@ -36,32 +36,35 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 class CVAnalyzer:
-    def __init__(self):
-        # 1. Intentar cargar el conf.env con ruta absoluta dentro del init
-        # Localización robusta: subimos dos niveles desde src/backend a la raíz
-        script_dir = Path(__file__).resolve().parent
-        dotenv_path = script_dir.parent.parent / 'conf.env'
-        
-        load_dotenv(dotenv_path=dotenv_path)
-        
-        raw_key = os.getenv("GEMINI_API_KEY")
-        self.api_key = raw_key.strip() if raw_key else None
+    
+    def __init__(self, api_key=None):
+        if api_key:
+            self.api_key = api_key.strip()
+        else:
+            # Localizar conf.env según estemos congelados (.exe) o en desarrollo
+            if getattr(sys, 'frozen', False):
+                base_dir = Path(sys.executable).resolve().parent
+            else:
+                base_dir = Path(__file__).resolve().parent.parent.parent
+            
+            dotenv_path = base_dir / 'conf.env'
+            load_dotenv(dotenv_path=dotenv_path)
+            
+            raw_key = os.getenv("GEMINI_API_KEY")
+            self.api_key = raw_key.strip() if raw_key else None
         
         self.url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
         self.model = "gemini-3.1-flash-lite"
         
-        
-        # 3. Inicializar headers
+        # Inicializar headers
         self.headers = {
             "Content-Type": "application/json"
         }
         if self.api_key:
             self.headers["Authorization"] = f"Bearer {self.api_key}"
 
-        # Motivo del último fallo de analyze(): "rate_limit", "timeout", "server_busy", "format", "connection", "api" o None
+        # Motivo del último fallo de analyze()
         self.last_error = None
-
-        # Función opcional (ej. la cola de log de la GUI) que recibe los avisos de reintento
         self.status_callback = None
 
         self.system_prompt = (
@@ -71,7 +74,6 @@ class CVAnalyzer:
             "\"motivo\": \"texto explicativo sin comillas internas\"}). No añadas llaves dobles al final."
         )
 
-        # 3. DEFINICIÓN DE LA PLANTILLA
         self.prompt_template = """
         Misión: Actúa como un reclutador profesional para evaluar la idoneidad del candidato para el puesto: {job_description}.
         
@@ -101,6 +103,8 @@ class CVAnalyzer:
         TEXTO DEL CV (ANONIMIZADO):
         {cv_text}
         """
+    
+  
 
 
     def set_api_key(self, api_key):
