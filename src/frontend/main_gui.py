@@ -1407,9 +1407,27 @@ class SmartCVFilterApp(ctk.CTk):
 
 
 if __name__ == "__main__":
-    ctk.set_widget_scaling(1.0)  # Fuerza escala 1:1
-    app = SmartCVFilterApp()
-    # En lugar de fijarlo a lo bruto, usamos after para esperar 200ms
-    # Esto suele evitar el Segmentation Fault en Linux
-    app.after(200, lambda: ctk.set_appearance_mode("dark"))
-    app.mainloop()
+    import traceback
+    
+    # Ruta del archivo de registro de emergencia
+    log_crash = os.path.join(executable_path, "crash_error.log")
+    
+    try:
+        with open(log_crash, "w", encoding="utf-8") as f:
+            f.write("--- INICIANDO APLICACION ---\n")
+        
+        ctk.set_widget_scaling(1.0)
+        app = SmartCVFilterApp()
+        
+        with open(log_crash, "a", encoding="utf-8") as f:
+            f.write("--- VENTANA INSTANCIADA CON EXITO, ENTRANDO EN MAINLOOP ---\n")
+            
+        app.after(200, lambda: ctk.set_appearance_mode("dark"))
+        app.mainloop()
+        
+        with open(log_crash, "a", encoding="utf-8") as f:
+            f.write("--- MAINLOOP HA TERMINADO DE FORMA LIMPIA ---\n")
+
+    except Exception as e:
+        with open(log_crash, "a", encoding="utf-8") as f:
+            f.write(f"\n❌ EXCEPCION NO CAPTURADA:\n{traceback.format_exc()}\n")
